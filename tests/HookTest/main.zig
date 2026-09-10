@@ -827,3 +827,15 @@ test "live termsrv.dll: discover() finds all three sites (read-only)" {
     try std.testing.expect(rep.local_only != null);
     try std.testing.expect(rep.local_only.?.rva == 0xbbf1e);
 }
+
+test "patch: applyBytes copies exact bytes, rejects host-only paths" {
+    const Patch = @import("Patch");
+    var dest: [8]u8 = [_]u8{0} ** 8;
+    Patch.applyBytes(&dest, &[_]u8{ 0x90, 0xEB, 0x01 });
+    try std.testing.expect(dest[0] == 0x90 and dest[1] == 0xEB and dest[2] == 0x01);
+    try std.testing.expect(dest[3] == 0);
+    try std.testing.expect(Patch.suspendOtherThreads() == error.UnsupportedOs);
+    try std.testing.expect(Patch.resumeOtherThreads() == error.UnsupportedOs);
+    try std.testing.expect(Patch.applyProtected(&dest, &[_]u8{0x90}) == error.UnsupportedOs);
+    try std.testing.expect(Patch.hookInit() == error.UnsupportedOs);
+}

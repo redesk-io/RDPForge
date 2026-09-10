@@ -1,5 +1,6 @@
 const std = @import("std");
 const windows = std.os.windows;
+const Patch = @import("Patch");
 
 var already_hooked: windows.LONG = 0;
 
@@ -13,7 +14,12 @@ export fn DllMain(hinst: windows.HINSTANCE, reason: u32, _: ?*anyopaque) callcon
 }
 
 fn hookInit() void {
-    @import("AutoFind.zig").run();
+    if (Patch.hookInit()) |rep| {
+        _ = rep;
+        Patch.trace("RDPForge: discover ok");
+    } else |_| {
+        Patch.trace("RDPForge: boot unpatched");
+    }
 }
 
 export fn ServiceMain(argc: u32, argv: ?*anyopaque) callconv(.winapi) void {

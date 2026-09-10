@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const Args = @import("Args.zig");
-const Backend = @import("Backend.zig");
+const Args = @import("Args");
+const Backend = @import("Backend");
 
 pub fn main() !void {
     var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
