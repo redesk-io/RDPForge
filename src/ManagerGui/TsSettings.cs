@@ -15,6 +15,12 @@ namespace RDPForge
                 .OpenSubKey(TsKey, writable);
         }
 
+        static RegistryKey OpenRdpTcp(bool writable)
+        {
+            return RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)
+                .OpenSubKey(RdpTcp, writable);
+        }
+
         public static bool GetAllowConnections()
         {
             using (var key = OpenTs(false))
@@ -44,16 +50,55 @@ namespace RDPForge
 
         public static int GetPort()
         {
-            using (var key = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)
-                .OpenSubKey(RdpTcp, false))
+            using (var key = OpenRdpTcp(false))
                 return Convert.ToInt32(key?.GetValue("PortNumber", 3389) ?? 3389);
         }
 
         public static void SetPort(int port)
         {
-            using (var key = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)
-                .OpenSubKey(RdpTcp, true))
+            using (var key = OpenRdpTcp(true))
                 key?.SetValue("PortNumber", port, RegistryValueKind.DWord);
+        }
+
+        public enum NlaMode { GuiOnly, Default, Nla }
+
+        public static NlaMode GetNla()
+        {
+            using (var key = OpenRdpTcp(false))
+            {
+                int layer = Convert.ToInt32(key?.GetValue("SecurityLayer", 1) ?? 1);
+                int auth = Convert.ToInt32(key?.GetValue("UserAuthentication", 0) ?? 0);
+                if (layer == 2 && auth == 1) return NlaMode.Nla;
+                if (layer == 0 && auth == 0) return NlaMode.GuiOnly;
+                return NlaMode.Default;
+            }
+        }
+
+        public static void SetNla(NlaMode mode)
+        {
+            int layer = 1, auth = 0;
+            if (mode == NlaMode.Nla) { layer = 2; auth = 1; }
+            if (mode == NlaMode.GuiOnly) { layer = 0; auth = 0; }
+            using (var key = OpenRdpTcp(true))
+            {
+                key?.SetValue("SecurityLayer", layer, RegistryValueKind.DWord);
+                key?.SetValue("UserAuthentication", auth, RegistryValueKind.DWord);
+            }
+        }
+
+        public static int GetShadow()
+        {
+            using (var key = OpenRdpTcp(false))
+                return Convert.ToInt32(key?.GetValue("Shadow", 1) ?? 1);
+        }
+
+        public static void SetShadow(int value)
+        {
+            using (var key = OpenRdpTcp(true))
+                key?.SetValue("Shadow", value, RegistryValueKind.DWord);
+            using (var pol = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)
+                .OpenSubKey(PolicyTs, true))
+                pol?.SetValue("Shadow", value, RegistryValueKind.DWord);
         }
     }
 }
