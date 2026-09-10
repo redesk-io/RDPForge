@@ -86,3 +86,35 @@ pub fn findDefPolicySite(code: []const u8, code_rva: u32) ?DefPolicySite {
     }
     return null;
 }
+
+pub const CallSite = struct { at_rva: u32, target_rva: ?u32 };
+
+pub fn listCallsNear(code: []const u8, code_rva: u32, center_rva: u32, radius: u32, out: []CallSite) []CallSite {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < code.len and n < out.len) {
+        const full = Decode.decodeFull64(code[i..]) orelse {
+            i += 1;
+            continue;
+        };
+        if (full.length == 0) {
+            i += 1;
+            continue;
+        }
+        const at: u32 = code_rva + @as(u32, @intCast(i));
+        if (full.mnemonic == Decode.CALL and at >= center_rva -| radius and at <= center_rva +| radius) {
+            var target: ?u32 = null;
+            for (full.operands[0..full.op_count]) |op| {
+                if (op.type == Decode.OP_IMM) {
+                    const rel = op.unnamed_0.imm.value.s;
+                    target = @as(u32, @truncate(@as(u64, @bitCast(@as(i64, at) + @as(i64, full.length) + rel))));
+                    break;
+                }
+            }
+            out[n] = .{ .at_rva = at, .target_rva = target };
+            n += 1;
+        }
+        i += full.length;
+    }
+    return out[0..n];
+}

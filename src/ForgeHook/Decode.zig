@@ -18,6 +18,7 @@ pub const TEST: c_uint = c.ZYDIS_MNEMONIC_TEST;
 
 pub const RIP_REG: c_uint = c.ZYDIS_REGISTER_RIP;
 pub const OP_MEM: c_uint = c.ZYDIS_OPERAND_TYPE_MEMORY;
+pub const OP_IMM: c_uint = c.ZYDIS_OPERAND_TYPE_IMMEDIATE;
 pub const MAX_OPS: usize = c.ZYDIS_MAX_OPERAND_COUNT;
 
 pub const FullInsn = struct {

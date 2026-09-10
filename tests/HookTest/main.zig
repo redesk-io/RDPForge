@@ -316,3 +316,100 @@ test "live termsrv.dll: DefPolicy site validates (read-only)" {
     try std.testing.expect(site.cmp_rva == 0x6a5c9);
     try std.testing.expect(site.jcc_rva == 0x6a5d0);
 }
+
+test "live termsrv.dll: LocalOnly anchor xref census (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    var text_name: [8]u8 = [_]u8{0} ** 8;
+    @memcpy(text_name[0..5], ".text");
+    const text = Pe.findSection(sections, &text_name) orelse return error.MissingText;
+    const code = buf[text.raw_ptr .. text.raw_ptr + text.raw_size];
+    const markers = [_][]const u8{ "GetInstanceOfTSLicense", "IsLicenseTypeLocalOnly", "IsTerminalTypeLocalOnly" };
+    for (markers) |m| {
+        var occ: [16]usize = undefined;
+        const all = Anchors.findAllAnchors(buf, m, &occ);
+        for (all) |off| {
+            const rva = Pe.offsetToRva(sections, off) orelse continue;
+            var out: [1024]Xref.Xref = undefined;
+            const found = Xref.scanRipXrefs(code, text.virtual_address, rva, &out);
+            std.debug.print("{s} off={x} rva={x} xrefs={d}\n", .{ m, off, rva, found.len });
+            for (found) |x| {
+                const func = Pdata.containingFunctionForRva(buf, sections, x.at_rva) catch continue;
+                std.debug.print("  xref at={x} func=[{x},{x})\n", .{ x.at_rva, func.begin, func.end });
+            }
+        }
+    }
+}
+
+test "live termsrv.dll: LocalOnly candidate windows (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    const at_list = [_]u32{ 0xbbf5d, 0xbc021, 0xbc0c1, 0xbc1c7 };
+    for (at_list) |at| {
+        const off = Pe.rvaToOffset(sections, at) orelse continue;
+        std.debug.print("--- window at {x} ---\n", .{at});
+        var i: usize = 0;
+        var shown: usize = 0;
+        while (i < 96 and shown < 12) {
+            const full = Decode.decodeFull64(buf[off + i .. off + 128]) orelse {
+                i += 1;
+                continue;
+            };
+            if (full.length == 0) {
+                i += 1;
+                continue;
+            }
+            std.debug.print("  {x}: mnem={d} len={d}\n", .{ at + @as(u32, @intCast(i)), full.mnemonic, full.length });
+            i += full.length;
+            shown += 1;
+        }
+    }
+}
+
+test "live termsrv.dll: CALLs near LocalOnly LEAs (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    const func_begin: u32 = 0xbbea0;
+    const func_end: u32 = 0xc24b2;
+    const f_off = Pe.rvaToOffset(sections, func_begin) orelse return error.FuncUnmapped;
+    const f_end = Pe.rvaToOffset(sections, func_end) orelse return error.FuncEndUnmapped;
+    const centers = [_]u32{ 0xbbf5d, 0xbc021, 0xbc0c1, 0xbc1c7 };
+    for (centers) |c| {
+        var out: [32]Validate.CallSite = undefined;
+        const calls = Validate.listCallsNear(buf[f_off..f_end], func_begin, c, 256, &out);
+        std.debug.print("calls near {x}: {d}\n", .{ c, calls.len });
+        for (calls) |cs| {
+            if (cs.target_rva) |t| {
+                const tf = Pdata.containingFunctionForRva(buf, sections, t) catch {
+                    std.debug.print("  call at={x} -> {x} (no func)\n", .{ cs.at_rva, t });
+                    continue;
+                };
+                std.debug.print("  call at={x} -> {x} func=[{x},{x})\n", .{ cs.at_rva, t, tf.begin, tf.end });
+            } else {
+                std.debug.print("  call at={x} -> indirect\n", .{cs.at_rva});
+            }
+        }
+    }
+}
