@@ -1,6 +1,6 @@
 const Decode = @import("Decode");
 
-pub const CmpSite = struct { at_rva: u32, disp: i64 };
+pub const CmpSite = struct { at_rva: u32, disp: i64, base_reg: c_uint, insn_len: u8 };
 
 pub fn findCmpMemDisp(code: []const u8, code_rva: u32, disp_want: i64) ?CmpSite {    var i: usize = 0;
     while (i < code.len) {
@@ -19,6 +19,8 @@ pub fn findCmpMemDisp(code: []const u8, code_rva: u32, disp_want: i64) ?CmpSite 
                     return .{
                         .at_rva = code_rva + @as(u32, @intCast(i)),
                         .disp = disp_want,
+                        .base_reg = op.unnamed_0.mem.base,
+                        .insn_len = full.length,
                     };
                 }
             }
@@ -46,6 +48,8 @@ pub fn listCmpMemDisps(code: []const u8, code_rva: u32, out: []CmpSite) []CmpSit
                 out[n] = .{
                     .at_rva = code_rva + @as(u32, @intCast(i)),
                     .disp = op.unnamed_0.mem.disp.value,
+                    .base_reg = op.unnamed_0.mem.base,
+                    .insn_len = full.length,
                 };
                 n += 1;
                 break;
@@ -318,4 +322,80 @@ pub fn listMovMemImm1(code: []const u8, code_rva: u32, out: []GlobalInit) []Glob
         i += full.length;
     }
     return out[0..n];
+}
+
+pub const PatchBlob = struct { bytes: [16]u8, len: u8 };
+
+pub fn encodeDefPolicy(cmp: CmpSite, jcc_len: u8) ?PatchBlob {
+    const base = Decode.regCode64(cmp.base_reg) orelse return null;
+    if (base & 0x7 == 4) return null;
+    const total: usize = @as(usize, cmp.insn_len) + jcc_len;
+    if (total < 12 or total > 16) return null;
+    if (cmp.disp < 0 or cmp.disp > 0x7FFFFFFF) return null;
+    const d: u32 = @as(u32, @intCast(cmp.disp));
+    const rex: bool = base >= 8;
+    if (encodeMovEax(total, base, rex, d)) |b| return b;
+    return encodeMovImm(total, base, rex, d);
+}
+
+fn encodeMovEax(total: usize, base: u4, rex: bool, d: u32) ?PatchBlob {
+    const head: usize = 5 + (if (rex) @as(usize, 1) else 0) + 6;
+    if (total < head + 2) return null;
+    var out = PatchBlob{ .bytes = [_]u8{0x90} ** 16, .len = @as(u8, @intCast(total)) };
+    var i: usize = 0;
+    out.bytes[i] = 0xB8;
+    i += 1;
+    out.bytes[i] = 0x01;
+    out.bytes[i + 1] = 0x00;
+    out.bytes[i + 2] = 0x00;
+    out.bytes[i + 3] = 0x00;
+    i += 4;
+    if (rex) {
+        out.bytes[i] = 0x41;
+        i += 1;
+    }
+    out.bytes[i] = 0x89;
+    i += 1;
+    out.bytes[i] = 0x80 | @as(u8, base & 0x7);
+    i += 1;
+    out.bytes[i] = @as(u8, @truncate(d));
+    out.bytes[i + 1] = @as(u8, @truncate(d >> 8));
+    out.bytes[i + 2] = @as(u8, @truncate(d >> 16));
+    out.bytes[i + 3] = @as(u8, @truncate(d >> 24));
+    i += 4;
+    var k: usize = i;
+    while (k < total - 2) : (k += 1) out.bytes[k] = 0x90;
+    out.bytes[total - 2] = 0xEB;
+    out.bytes[total - 1] = 0x00;
+    return out;
+}
+
+fn encodeMovImm(total: usize, base: u4, rex: bool, d: u32) ?PatchBlob {
+    const head: usize = (if (rex) @as(usize, 1) else 0) + 10;
+    if (total < head + 2) return null;
+    var out = PatchBlob{ .bytes = [_]u8{0x90} ** 16, .len = @as(u8, @intCast(total)) };
+    var i: usize = 0;
+    if (rex) {
+        out.bytes[i] = 0x41;
+        i += 1;
+    }
+    out.bytes[i] = 0xC7;
+    i += 1;
+    out.bytes[i] = 0x80 | @as(u8, base & 0x7);
+    i += 1;
+    out.bytes[i] = @as(u8, @truncate(d));
+    out.bytes[i + 1] = @as(u8, @truncate(d >> 8));
+    out.bytes[i + 2] = @as(u8, @truncate(d >> 16));
+    out.bytes[i + 3] = @as(u8, @truncate(d >> 24));
+    i += 4;
+    out.bytes[i] = 0x01;
+    out.bytes[i + 1] = 0x00;
+    out.bytes[i + 2] = 0x00;
+    out.bytes[i + 3] = 0x00;
+    i += 4;
+    var k: usize = i;
+    while (k < total - 2) : (k += 1) out.bytes[k] = 0x90;
+    out.bytes[total - 2] = 0xEB;
+    out.bytes[total - 1] = 0x00;
+    return out;
 }

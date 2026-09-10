@@ -839,3 +839,36 @@ test "patch: applyBytes copies exact bytes, rejects host-only paths" {
     try std.testing.expect(Patch.applyProtected(&dest, &[_]u8{0x90}) == error.UnsupportedOs);
     try std.testing.expect(Patch.hookInit() == error.UnsupportedOs);
 }
+
+test "encodeDefPolicy synthetic RCX/63C shape" {
+    const Validate = @import("Validate");
+    const site = Validate.CmpSite{ .at_rva = 0x1000, .disp = 0x63C, .base_reg = Decode.REG_RCX, .insn_len = 8 };
+    const blob = Validate.encodeDefPolicy(site, 6) orelse return error.EncodeFailed;
+    try std.testing.expect(blob.len == 14);
+    const want = [_]u8{ 0xB8, 0x01, 0x00, 0x00, 0x00, 0x89, 0x81, 0x3C, 0x06, 0x00, 0x00, 0x90, 0xEB, 0x00 };
+    try std.testing.expect(std.mem.eql(u8, blob.bytes[0..14], &want));
+    try std.testing.expect(Validate.encodeDefPolicy(.{ .at_rva = 0, .disp = 0x63C, .base_reg = 0xFFFFFFFF, .insn_len = 8 }, 6) == null);
+    try std.testing.expect(Validate.encodeDefPolicy(site, 2) == null);
+}
+
+test "live termsrv.dll: DefPolicy blob for site 6a5c9 (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    const f_off = Pe.rvaToOffset(sections, 0x6a52c) orelse return error.FuncUnmapped;
+    const f_end = Pe.rvaToOffset(sections, 0x6a66e) orelse return error.FuncEndUnmapped;
+    const cmp = Validate.findCmpMemDisp(buf[f_off..f_end], 0x6a52c, 0x63C) orelse return error.CmpMissing;
+    std.debug.print("cmp len={d} base={d} code={?d}\n", .{ cmp.insn_len, cmp.base_reg, Decode.regCode64(cmp.base_reg) });
+    const blob = Validate.encodeDefPolicy(cmp, 6) orelse return error.EncodeFailed;
+    std.debug.print("blob len={d} head={x}{x} tail={x}{x}\n", .{ blob.len, blob.bytes[0], blob.bytes[1], blob.bytes[blob.len - 2], blob.bytes[blob.len - 1] });
+    try std.testing.expect(blob.len == 13);
+    try std.testing.expect(blob.bytes[0] == 0x41 and blob.bytes[1] == 0xC7);
+    try std.testing.expect(blob.bytes[blob.len - 2] == 0xEB and blob.bytes[blob.len - 1] == 0x00);
+}
