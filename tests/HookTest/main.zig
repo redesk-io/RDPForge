@@ -3,6 +3,9 @@ const AutoFind = @import("AutoFind");
 const Pe = @import("Pe");
 const Anchors = @import("Anchors");
 const Decode = @import("Decode");
+const NtHeaders = @import("NtHeaders");
+const Pdata = @import("Pdata");
+const Xref = @import("Xref");
 
 test "emissions must be <= 16 bytes (R3 gate)" {
     const e = AutoFind.Emission{ .site = .def_policy, .rva = 0x1234, .len = 16 };
@@ -57,4 +60,70 @@ test "pe parser reads synthetic section table" {
     try std.testing.expect(Pe.findSection(sections, &name) != null);
     try std.testing.expect(Pe.rvaToOffset(sections, 0x1010) == 0x200 + 0x10);
     try std.testing.expect(Pe.rvaToOffset(sections, 0x9999) == null);
+}
+
+test "x64 LEA RIP resolver hits planted xref" {
+    var code: [32]u8 = [_]u8{0xCC} ** 32;
+    code[4] = 0x48;
+    code[5] = 0x8D;
+    code[6] = 0x0D;
+    const code_rva: u32 = 0x1000;
+    const want: u32 = 0x2000;
+    const disp: i32 = @as(i32, @bitCast(want)) - (@as(i32, @bitCast(code_rva)) + 4 + 7);
+    std.mem.writeInt(i32, code[7..][0..4], disp, .little);
+    const hit = Xref.matchLeaRip(&code, code_rva, want);
+    try std.testing.expect(hit != null);
+    try std.testing.expect(hit.?.at_rva == code_rva + 4);
+    try std.testing.expect(Xref.matchLeaRip(&code, code_rva, 0x9999) == null);
+}
+
+test "x86 prologue scanner enumerates two functions" {
+    var code: [32]u8 = [_]u8{0x90} ** 32;
+    @memcpy(code[2..][0..5], &Xref.prologue_x86);
+    @memcpy(code[20..][0..5], &Xref.prologue_x86);
+    var out: [8]u32 = undefined;
+    const found = Xref.scanPrologues(&code, 0x5000, &out);
+    try std.testing.expect(found.len == 2);
+    try std.testing.expect(found[0] == 0x5002);
+    try std.testing.expect(found[1] == 0x5014);
+}
+
+test "arm64 adrp/add predicate sanity" {
+    try std.testing.expect(Xref.isAdrp(0x90000001));
+    try std.testing.expect(!Xref.isAdrp(0x91000001));
+    try std.testing.expect(Xref.isAddImm64(0x91000001));
+    try std.testing.expect(!Xref.isAddImm64(0x90000001));
+}
+
+test "pdata containing-function lookup" {
+    var table: [24]u8 = [_]u8{0} ** 24;
+    std.mem.writeInt(u32, table[0..][0..4], 0x1000, .little);
+    std.mem.writeInt(u32, table[4..][0..4], 0x1100, .little);
+    std.mem.writeInt(u32, table[12..][0..4], 0x2000, .little);
+    std.mem.writeInt(u32, table[16..][0..4], 0x2200, .little);
+    const f = try Pdata.containingFunction(&table, 0, 2, 0x2050);
+    try std.testing.expect(f.begin == 0x2000);
+    try std.testing.expect(Pdata.containingFunction(&table, 0, 2, 0x9999) == error.NoMatch);
+}
+
+test "live termsrv.dll headers + anchor (read-only, skipped if absent)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const n = buf.len;
+    const info = try NtHeaders.ntInfo(buf[0..n]);
+    try std.testing.expect(info.machine == .x64);
+    try std.testing.expect(info.is_64);
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf[0..n], &secs);
+    try std.testing.expect(sections.len == 8);
+    var rdata_name: [8]u8 = [_]u8{0} ** 8;
+    @memcpy(rdata_name[0..6], ".rdata");
+    _ = Pe.findSection(sections, &rdata_name) orelse return error.MissingRdata;
+    try std.testing.expect(Anchors.findAnchor(buf[0..n], "CDefPolicy::Query", 1) != null);
+    try std.testing.expect(Anchors.findAnchor(buf[0..n], "IsSingleSessionPerUser", 1) != null);
 }

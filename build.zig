@@ -106,6 +106,18 @@ pub fn build(b: *std.Build) void {
             .{ .name = "AutoFind", .module = autofind_mod },
         },
     });
+    const ntheaders_mod = b.createModule(.{
+        .root_source_file = b.path("src/ForgeHook/NtHeaders.zig"),
+        .target = b.graph.host,
+    });
+    const pdata_mod = b.createModule(.{
+        .root_source_file = b.path("src/ForgeHook/Pdata.zig"),
+        .target = b.graph.host,
+    });
+    const xref_mod = b.createModule(.{
+        .root_source_file = b.path("src/ForgeHook/Xref.zig"),
+        .target = b.graph.host,
+    });
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tests/HookTest/main.zig"),
@@ -115,6 +127,9 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "Decode", .module = decode_mod },
                 .{ .name = "Pe", .module = pe_mod },
                 .{ .name = "Anchors", .module = anchors_mod },
+                .{ .name = "NtHeaders", .module = ntheaders_mod },
+                .{ .name = "Pdata", .module = pdata_mod },
+                .{ .name = "Xref", .module = xref_mod },
             },
         }),
     });
