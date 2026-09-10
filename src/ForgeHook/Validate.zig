@@ -200,3 +200,89 @@ pub fn findCallTestJz(code: []const u8, code_rva: u32) ?VersionCheckSite {
     }
     return null;
 }
+
+pub fn findAllCallTestJz(code: []const u8, code_rva: u32, out: []VersionCheckSite) []VersionCheckSite {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < code.len and n < out.len) {
+        const call = Decode.decodeFull64(code[i..]) orelse {
+            i += 1;
+            continue;
+        };
+        if (call.length == 0) {
+            i += 1;
+            continue;
+        }
+        if (call.mnemonic == Decode.CALL) {
+            const call_rva: u32 = code_rva + @as(u32, @intCast(i));
+            var j: usize = i + call.length;
+            var scanned: usize = 0;
+            var matched = false;
+            while (j < code.len and scanned < 48) {
+                const t = Decode.decodeFull64(code[j..]) orelse {
+                    j += 1;
+                    scanned += 1;
+                    continue;
+                };
+                if (t.length == 0) {
+                    j += 1;
+                    scanned += 1;
+                    continue;
+                }
+                if (t.mnemonic == Decode.TEST) {
+                    const n_off = j + t.length;
+                    if (n_off < code.len) {
+                        const nx = Decode.decodeFull64(code[n_off..]);
+                        if (nx) |nn| {
+                            if (nn.length > 0 and (nn.mnemonic == Decode.JZ or nn.mnemonic == Decode.JNZ)) {
+                                out[n] = .{
+                                    .call_rva = call_rva,
+                                    .jz_rva = code_rva + @as(u32, @intCast(n_off)),
+                                    .jz_len = nn.length,
+                                };
+                                n += 1;
+                                matched = true;
+                            }
+                        }
+                    }
+                    break;
+                }
+                j += t.length;
+                scanned += t.length;
+            }
+            if (matched) {
+                i += call.length;
+                continue;
+            }
+        }
+        i += call.length;
+    }
+    return out[0..n];
+}
+
+pub const RankedSite = struct { site: VersionCheckSite, dist: u32 };
+
+pub fn rankByLeaProximity(sites: []const VersionCheckSite, leas: []const u32, out: []RankedSite) []RankedSite {
+    var n: usize = 0;
+    for (sites) |s| {
+        if (n >= out.len) break;
+        var best: u32 = 0xFFFFFFFF;
+        for (leas) |l| {
+            const d: u32 = if (s.jz_rva >= l) s.jz_rva - l else l - s.jz_rva;
+            if (d < best) best = d;
+        }
+        out[n] = .{ .site = s, .dist = best };
+        n += 1;
+    }
+    var i: usize = 1;
+    while (i < n) : (i += 1) {
+        var j: usize = i;
+        while (j > 0 and out[j].dist < out[j - 1].dist) {
+            const t = out[j];
+            out[j] = out[j - 1];
+            out[j - 1] = t;
+            j -= 1;
+        }
+    }
+    return out[0..n];
+}

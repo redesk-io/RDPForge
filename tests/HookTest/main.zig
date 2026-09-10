@@ -600,3 +600,103 @@ test "live termsrv.dll: SingleUser CALL-TEST-JZ site (read-only)" {
     std.debug.print("SingleUser site: call={x} jz={x} len={d}\n", .{ site.call_rva, site.jz_rva, site.jz_len });
     try std.testing.expect(site.jz_rva == 0xa6389);
 }
+
+test "live termsrv.dll: LocalOnly shape ranking (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    const func_begin: u32 = 0xbbea0;
+    const func_end: u32 = 0xc24b2;
+    const f_off = Pe.rvaToOffset(sections, func_begin) orelse return error.FuncUnmapped;
+    const f_end = Pe.rvaToOffset(sections, func_end) orelse return error.FuncEndUnmapped;
+    var out: [256]Validate.VersionCheckSite = undefined;
+    const sites = Validate.findAllCallTestJz(buf[f_off..f_end], func_begin, &out);
+    const leas = [_]u32{ 0xbbf5d, 0xbc021, 0xbc0c1, 0xbc1c7 };
+    std.debug.print("call-test-jz shapes in func: {d}\n", .{sites.len});
+    var shown: usize = 0;
+    for (sites) |s| {
+        var best: u32 = 0xFFFFFFFF;
+        for (leas) |l| {
+            const d: u32 = if (s.jz_rva >= l) s.jz_rva - l else l - s.jz_rva;
+            if (d < best) best = d;
+        }
+        if (best > 1024) continue;
+        const callee: u32 = 0;
+        _ = callee;
+        std.debug.print("  call={x} jz={x} len={d} dist-to-lea={d}\n", .{ s.call_rva, s.jz_rva, s.jz_len, best });
+        shown += 1;
+        if (shown >= 12) break;
+    }
+}
+
+test "live termsrv.dll: top LocalOnly candidate callees (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    for ([_]u32{ 0xbbf10, 0xbc16c }) |c| {
+        const off = Pe.rvaToOffset(sections, c) orelse continue;
+        const full = Decode.decodeFull64(buf[off..][0..16]) orelse continue;
+        std.debug.print("call at={x} ops={d}", .{ c, full.op_count });
+        for (full.operands[0..full.op_count]) |op| {
+            if (op.type == Decode.OP_MEM) {
+                const t = Decode.ripTarget(c, full.length, op.unnamed_0.mem.disp.value);
+                std.debug.print(" mem-> {x}", .{t});
+            } else if (op.type == Decode.OP_IMM) {
+                const t = Decode.ripTarget(c, full.length, op.unnamed_0.imm.value.s);
+                std.debug.print(" rel-> {x}", .{t});
+            }
+        }
+        std.debug.print("\n", .{});
+    }
+    const t_off = Pe.rvaToOffset(sections, 0x2dbac) orelse return error.X;
+    std.debug.print("--- target func [2dbac,2dbc8) ---\n", .{});
+    var i: usize = 0;
+    while (i < 0x2dbc8 - 0x2dbac) {
+        const full = Decode.decodeFull64(buf[t_off + i .. t_off + 0x20]) orelse {
+            i += 1;
+            continue;
+        };
+        if (full.length == 0) {
+            i += 1;
+            continue;
+        }
+        std.debug.print("  {x}: mnem={d} len={d}\n", .{ 0x2dbac + @as(u32, @intCast(i)), full.mnemonic, full.length });
+        i += full.length;
+    }
+}
+
+test "live termsrv.dll: LocalOnly heuristic top-rank (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    const f_off = Pe.rvaToOffset(sections, 0xbbea0) orelse return error.FuncUnmapped;
+    const f_end = Pe.rvaToOffset(sections, 0xc24b2) orelse return error.FuncEndUnmapped;
+    var shapes: [256]Validate.VersionCheckSite = undefined;
+    const found = Validate.findAllCallTestJz(buf[f_off..f_end], 0xbbea0, &shapes);
+    const leas = [_]u32{ 0xbbf5d, 0xbc021, 0xbc0c1, 0xbc1c7 };
+    var ranked: [256]Validate.RankedSite = undefined;
+    const ordered = Validate.rankByLeaProximity(found, &leas, &ranked);
+    try std.testing.expect(ordered.len > 0);
+    std.debug.print("LocalOnly top: jz={x} len={d} dist={d} of {d}\n", .{ ordered[0].site.jz_rva, ordered[0].site.jz_len, ordered[0].dist, ordered.len });
+    try std.testing.expect(ordered[0].site.jz_rva == 0xbbf1e);
+}
