@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "notes": "Pinned termsrv.dll corpus. Binaries are NOT checked in; CI fetches by hash via the download manifest workflow. Live tests skip cleanly when a file is absent.",
+  "entries": [
+    {
+      "id": "local-dev-win11-x64",
+      "arch": "x86_64",
+      "os": "Windows 11 (dev machine)",
+      "file": "termsrv.dll",
+      "sha256": "5ef166d8f742c318b8586e29d0e96920987dd401b9c517b09c4f6c6aa122dd1c",
+      "size": 1290240,
+      "expected": {
+        "def_policy_jz": "0x6a5d0",
+        "single_user_jz": "0xa6389",
+        "local_only_jz_heuristic": "0xbbf1e"
+      }
+    }
+  ]
+}
