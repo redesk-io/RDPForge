@@ -399,3 +399,51 @@ fn encodeMovImm(total: usize, base: u4, rex: bool, d: u32) ?PatchBlob {
     out.bytes[total - 1] = 0x00;
     return out;
 }
+
+pub const BranchBlob = struct { bytes: [16]u8, len: u8 };
+
+pub fn encodeNopFill(len: u8) ?BranchBlob {
+    if (len == 0 or len > 16) return null;
+    const out = BranchBlob{ .bytes = [_]u8{0x90} ** 16, .len = len };
+    return out;
+}
+
+pub fn encodeNopJmp(jcc_len: u8, rel32: i64) ?BranchBlob {
+    if (jcc_len < 5 or jcc_len > 16) return null;
+    if (rel32 < -0x80000000 or rel32 > 0x7FFFFFFF) return null;
+    var out = BranchBlob{ .bytes = [_]u8{0x90} ** 16, .len = jcc_len };
+    out.bytes[0] = 0x90;
+    out.bytes[1] = 0xE9;
+    const r: u32 = @as(u32, @truncate(@as(u64, @bitCast(rel32))));
+    out.bytes[2] = @as(u8, @truncate(r));
+    out.bytes[3] = @as(u8, @truncate(r >> 8));
+    out.bytes[4] = @as(u8, @truncate(r >> 16));
+    out.bytes[5] = @as(u8, @truncate(r >> 24));
+    return out;
+}
+
+pub fn encodeJmpShort(total_len: u8, rel8: i64) ?BranchBlob {
+    if (total_len < 2 or total_len > 16) return null;
+    if (rel8 < -128 or rel8 > 127) return null;
+    var out = BranchBlob{ .bytes = [_]u8{0x90} ** 16, .len = total_len };
+    out.bytes[0] = 0xEB;
+    out.bytes[1] = @as(u8, @truncate(@as(u64, @bitCast(rel8))));
+    return out;
+}
+
+pub fn encodeMovEax1(total_len: u8) ?BranchBlob {
+    if (total_len < 5 or total_len > 16) return null;
+    var out = BranchBlob{ .bytes = [_]u8{0x90} ** 16, .len = total_len };
+    out.bytes[0] = 0xB8;
+    out.bytes[1] = 0x01;
+    out.bytes[2] = 0x00;
+    out.bytes[3] = 0x00;
+    out.bytes[4] = 0x00;
+    return out;
+}
+
+pub fn encodeZero(len: u8) ?BranchBlob {
+    if (len == 0 or len > 16) return null;
+    const out = BranchBlob{ .bytes = [_]u8{0x00} ** 16, .len = len };
+    return out;
+}

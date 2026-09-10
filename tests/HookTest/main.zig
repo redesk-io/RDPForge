@@ -872,3 +872,165 @@ test "live termsrv.dll: DefPolicy blob for site 6a5c9 (read-only)" {
     try std.testing.expect(blob.bytes[0] == 0x41 and blob.bytes[1] == 0xC7);
     try std.testing.expect(blob.bytes[blob.len - 2] == 0xEB and blob.bytes[blob.len - 1] == 0x00);
 }
+
+test "live termsrv.dll: SingleUser function full shape (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    const f_off = Pe.rvaToOffset(sections, 0xa62d4) orelse return error.FuncUnmapped;
+    const f_end = Pe.rvaToOffset(sections, 0xa6555) orelse return error.FuncEndUnmapped;
+    const code = buf[f_off..f_end];
+    var i: usize = 0;
+    while (i < code.len) {
+        const full = Decode.decodeFull64(code[i..]) orelse {
+            i += 1;
+            continue;
+        };
+        if (full.length == 0) {
+            i += 1;
+            continue;
+        }
+        const at: u32 = 0xa62d4 + @as(u32, @intCast(i));
+        if (at >= 0xa6360 and at <= 0xa6400) {
+            std.debug.print("  {x}: mnem={d} len={d}\n", .{ at, full.mnemonic, full.length });
+        }
+        i += full.length;
+    }
+}
+
+test "live termsrv.dll: SingleUser JZ polarity probe (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    for ([_]u32{ 0xa6389, 0xa638f }) |rva| {
+        const off = Pe.rvaToOffset(sections, rva) orelse continue;
+        const full = Decode.decodeFull64(buf[off..][0..16]) orelse continue;
+        std.debug.print("at={x} len={d} ops={d}", .{ rva, full.length, full.op_count });
+        for (full.operands[0..full.op_count]) |op| {
+            if (op.type == Decode.OP_IMM) {
+                const t = Decode.ripTarget(rva, full.length, op.unnamed_0.imm.value.s);
+                std.debug.print(" imm-> {x}", .{t});
+            } else if (op.type == Decode.OP_MEM) {
+                std.debug.print(" mem(base={d},disp={d})", .{ op.unnamed_0.mem.base, op.unnamed_0.mem.disp.value });
+            } else {
+                std.debug.print(" op(type={d})", .{op.type});
+            }
+        }
+        std.debug.print("\n", .{});
+    }
+}
+
+test "live termsrv.dll: SingleUser branch targets probe (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    for ([_]u32{ 0xa638f, 0xa6517 }) |rva| {
+        const off = Pe.rvaToOffset(sections, rva) orelse continue;
+        std.debug.print("--- path at {x} ---\n", .{rva});
+        var i: usize = 0;
+        var shown: usize = 0;
+        while (i < 64 and shown < 8) {
+            const full = Decode.decodeFull64(buf[off + i .. off + 96]) orelse {
+                i += 1;
+                continue;
+            };
+            if (full.length == 0) {
+                i += 1;
+                continue;
+            }
+            std.debug.print("  {x}: mnem={d} len={d} ops={d}\n", .{ rva + @as(u32, @intCast(i)), full.mnemonic, full.length, full.op_count });
+            i += full.length;
+            shown += 1;
+            if (full.mnemonic == 766 or full.mnemonic == 378) break;
+        }
+    }
+}
+
+test "branch emitters synthetic shapes" {
+    const Validate = @import("Validate");
+    const nop6 = Validate.encodeNopFill(6).?;
+    try std.testing.expect(std.mem.eql(u8, nop6.bytes[0..6], &[_]u8{ 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 }));
+    try std.testing.expect(Validate.encodeNopFill(0) == null);
+    try std.testing.expect(Validate.encodeNopFill(17) == null);
+    const nj = Validate.encodeNopJmp(6, 0x188).?;
+    try std.testing.expect(std.mem.eql(u8, nj.bytes[0..6], &[_]u8{ 0x90, 0xE9, 0x88, 0x01, 0x00, 0x00 }));
+    try std.testing.expect(Validate.encodeNopJmp(4, 0) == null);
+    try std.testing.expect(Validate.encodeNopJmp(6, 0x80000000) == null);
+    const js = Validate.encodeJmpShort(6, 0x10).?;
+    try std.testing.expect(std.mem.eql(u8, js.bytes[0..6], &[_]u8{ 0xEB, 0x10, 0x90, 0x90, 0x90, 0x90 }));
+    try std.testing.expect(Validate.encodeJmpShort(6, 200) == null);
+    try std.testing.expect(Validate.encodeJmpShort(1, 0) == null);
+    const m1 = Validate.encodeMovEax1(7).?;
+    try std.testing.expect(std.mem.eql(u8, m1.bytes[0..7], &[_]u8{ 0xB8, 0x01, 0x00, 0x00, 0x00, 0x90, 0x90 }));
+    try std.testing.expect(Validate.encodeMovEax1(4) == null);
+    const z = Validate.encodeZero(3).?;
+    try std.testing.expect(std.mem.eql(u8, z.bytes[0..3], &[_]u8{ 0x00, 0x00, 0x00 }));
+    try std.testing.expect(Validate.encodeZero(0) == null);
+}
+
+test "live termsrv.dll: SingleUser JZ nopjmp preserves target (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    const jz_rva: u32 = 0xa6389;
+    const jz_len: u8 = 6;
+    const target: u32 = 0xa6517;
+    const rel: i64 = @as(i64, target) - (@as(i64, jz_rva) + jz_len);
+    try std.testing.expect(rel == 0x188);
+    const blob = Validate.encodeNopJmp(jz_len, rel).?;
+    try std.testing.expect(std.mem.eql(u8, blob.bytes[0..6], &[_]u8{ 0x90, 0xE9, 0x88, 0x01, 0x00, 0x00 }));
+    _ = sections;
+}
+
+test "live termsrv.dll: LocalOnly JZ nopjmp preserves target (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    const jz_rva: u32 = 0xbbf1e;
+    const off = Pe.rvaToOffset(sections, jz_rva) orelse return error.JzUnmapped;
+    const full = Decode.decodeFull64(buf[off..][0..16]) orelse return error.DecodeFailed;
+    try std.testing.expect((full.mnemonic == Decode.JZ or full.mnemonic == Decode.JNZ) and full.length == 6);
+    var target: ?u32 = null;
+    for (full.operands[0..full.op_count]) |op| {
+        if (op.type != Decode.OP_IMM) continue;
+        target = Decode.ripTarget(jz_rva, full.length, op.unnamed_0.imm.value.s);
+    }
+    const t = target orelse return error.NoTarget;
+    const rel: i64 = @as(i64, t) - (@as(i64, jz_rva) + 6);
+    const blob = Validate.encodeNopJmp(6, rel).?;
+    try std.testing.expect(blob.bytes[0] == 0x90 and blob.bytes[1] == 0xE9);
+    const back: u32 = @as(u32, blob.bytes[2]) | (@as(u32, blob.bytes[3]) << 8) | (@as(u32, blob.bytes[4]) << 16) | (@as(u32, blob.bytes[5]) << 24);
+    try std.testing.expect(Decode.ripTarget(jz_rva + 1, 5, @as(i64, @bitCast(@as(u64, back)))) == t);
+}
