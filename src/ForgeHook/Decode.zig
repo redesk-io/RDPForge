@@ -15,6 +15,7 @@ pub const CMP: c_uint = c.ZYDIS_MNEMONIC_CMP;
 pub const JZ: c_uint = c.ZYDIS_MNEMONIC_JZ;
 pub const JNZ: c_uint = c.ZYDIS_MNEMONIC_JNZ;
 pub const TEST: c_uint = c.ZYDIS_MNEMONIC_TEST;
+pub const MOV: c_uint = c.ZYDIS_MNEMONIC_MOV;
 
 pub const RIP_REG: c_uint = c.ZYDIS_REGISTER_RIP;
 pub const OP_MEM: c_uint = c.ZYDIS_OPERAND_TYPE_MEMORY;

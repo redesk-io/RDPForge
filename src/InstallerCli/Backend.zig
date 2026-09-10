@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const Plan = @import("Plan.zig");
+const Plan = @import("Plan");
 
 pub const BackendError = error{ UnsupportedOs } || std.mem.Allocator.Error;
 
