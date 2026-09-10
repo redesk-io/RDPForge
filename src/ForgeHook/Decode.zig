@@ -13,6 +13,7 @@ pub const LEA: c_uint = c.ZYDIS_MNEMONIC_LEA;
 pub const CALL: c_uint = c.ZYDIS_MNEMONIC_CALL;
 pub const CMP: c_uint = c.ZYDIS_MNEMONIC_CMP;
 pub const JZ: c_uint = c.ZYDIS_MNEMONIC_JZ;
+pub const JNZ: c_uint = c.ZYDIS_MNEMONIC_JNZ;
 pub const TEST: c_uint = c.ZYDIS_MNEMONIC_TEST;
 
 pub const RIP_REG: c_uint = c.ZYDIS_REGISTER_RIP;

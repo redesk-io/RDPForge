@@ -9,6 +9,19 @@ pub fn findAnchor(haystack: []const u8, needle: []const u8, step: usize) ?usize 
     return null;
 }
 
+pub fn findAllAnchors(haystack: []const u8, needle: []const u8, out: []usize) []usize {
+    if (needle.len == 0 or needle.len > haystack.len) return out[0..0];
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i + needle.len <= haystack.len and n < out.len) : (i += 1) {
+        if (std.mem.eql(u8, haystack[i .. i + needle.len], needle)) {
+            out[n] = i;
+            n += 1;
+        }
+    }
+    return out[0..n];
+}
+
 pub const SiteAnchor = struct {
     site: @import("AutoFind").Site,
     marker: []const u8,

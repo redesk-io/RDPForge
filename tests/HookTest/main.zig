@@ -166,3 +166,153 @@ test "live termsrv.dll: RIP xrefs to CDefPolicy::Query string (read-only)" {
     std.debug.print("xrefs to CDefPolicy::Query: {d}\n", .{found.len});
     try std.testing.expect(found.len > 0);
 }
+
+test "live termsrv.dll: anchor to function to DefPolicy CMP (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    const Validate = @import("Validate");
+    const anchor_off = Anchors.findAnchor(buf, "CDefPolicy::Query", 1) orelse return error.AnchorMissing;
+    const anchor_rva = Pe.offsetToRva(sections, anchor_off) orelse return error.AnchorUnmapped;
+    var text_name: [8]u8 = [_]u8{0} ** 8;
+    @memcpy(text_name[0..5], ".text");
+    const text = Pe.findSection(sections, &text_name) orelse return error.MissingText;
+    const code = buf[text.raw_ptr .. text.raw_ptr + text.raw_size];
+    var out: [4096]Xref.Xref = undefined;
+    const found = Xref.scanRipXrefs(code, text.virtual_address, anchor_rva, &out);
+    try std.testing.expect(found.len > 0);
+    const func = try Pdata.containingFunctionForRva(buf, sections, found[0].at_rva);
+    std.debug.print("CDefPolicy::Query-ish func: begin={x} end={x} len={d}\n", .{ func.begin, func.end, func.end - func.begin });
+    try std.testing.expect(func.begin <= found[0].at_rva);
+    try std.testing.expect(func.end > found[0].at_rva);
+    try std.testing.expect(func.end - func.begin < 0x10000);
+    const f_off = Pe.rvaToOffset(sections, func.begin) orelse return error.FuncUnmapped;
+    const f_end = Pe.rvaToOffset(sections, func.end) orelse return error.FuncEndUnmapped;
+    const site = Validate.findCmpMemDisp(buf[f_off..f_end], func.begin, 0x63C);
+    if (site) |s| {
+        std.debug.print("DefPolicy CMP [base+63C] at={x}\n", .{s.at_rva});
+    } else {
+        std.debug.print("DefPolicy CMP [base+63C]: not in xref func\n", .{});
+    }
+}
+
+test "live termsrv.dll: CMP census of xref function (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    const f_off = Pe.rvaToOffset(sections, 0xa34d0) orelse return error.FuncUnmapped;
+    const f_end = Pe.rvaToOffset(sections, 0xa3550) orelse return error.FuncEndUnmapped;
+    var out: [32]Validate.CmpSite = undefined;
+    const sites = Validate.listCmpMemDisps(buf[f_off..f_end], 0xa34d0, &out);
+    for (sites) |s| std.debug.print("cmp at={x} disp={x}\n", .{ s.at_rva, s.disp });
+    std.debug.print("cmp count={d}\n", .{sites.len});
+}
+
+test "live termsrv.dll: all anchor occurrences and their xrefs (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    var occ: [16]usize = undefined;
+    const all = Anchors.findAllAnchors(buf, "CDefPolicy::Query", &occ);
+    try std.testing.expect(all.len == 2);
+    var text_name: [8]u8 = [_]u8{0} ** 8;
+    @memcpy(text_name[0..5], ".text");
+    const text = Pe.findSection(sections, &text_name) orelse return error.MissingText;
+    var fothk_name: [8]u8 = [_]u8{0} ** 8;
+    @memcpy(fothk_name[0..5], "fothk");
+    const fothk = Pe.findSection(sections, &fothk_name);
+    for (all) |off| {
+        const rva = Pe.offsetToRva(sections, off) orelse continue;
+        var out: [4096]Xref.Xref = undefined;
+        const code = buf[text.raw_ptr .. text.raw_ptr + text.raw_size];
+        const found = Xref.scanRipXrefs(code, text.virtual_address, rva, &out);
+        std.debug.print("anchor off={x} rva={x} text-xrefs={d}\n", .{ off, rva, found.len });
+        for (found) |x| {
+            const func = Pdata.containingFunctionForRva(buf, sections, x.at_rva) catch continue;
+            const f_off = Pe.rvaToOffset(sections, func.begin) orelse continue;
+            const f_end = Pe.rvaToOffset(sections, func.end) orelse continue;
+            var cmps: [64]Validate.CmpSite = undefined;
+            const sites = Validate.listCmpMemDisps(buf[f_off..f_end], func.begin, &cmps);
+            std.debug.print("  xref at={x} func=[{x},{x}) cmps={d}\n", .{ x.at_rva, func.begin, func.end, sites.len });
+            for (sites) |s| std.debug.print("    cmp at={x} disp={x}\n", .{ s.at_rva, s.disp });
+        }
+        if (fothk) |fk| {
+            const fcode = buf[fk.raw_ptr .. fk.raw_ptr + fk.raw_size];
+            const ffound = Xref.scanRipXrefs(fcode, fk.virtual_address, rva, &out);
+            std.debug.print("anchor off={x} fothk-xrefs={d}\n", .{ off, ffound.len });
+        }
+    }
+}
+
+test "live termsrv.dll: DefPolicy CMP signature census (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    var text_name: [8]u8 = [_]u8{0} ** 8;
+    @memcpy(text_name[0..5], ".text");
+    const text = Pe.findSection(sections, &text_name) orelse return error.MissingText;
+    const code = buf[text.raw_ptr .. text.raw_ptr + text.raw_size];
+    var out: [8192]Validate.CmpSite = undefined;
+    const sites = Validate.listCmpMemDisps(code, text.virtual_address, &out);
+    var n63c: usize = 0;
+    var n638: usize = 0;
+    for (sites) |s| {
+        if (s.disp == 0x63C) n63c += 1;
+        if (s.disp == 0x638) n638 += 1;
+    }
+    std.debug.print("cmp-mem total={d} disp63C={d} disp638={d}\n", .{ sites.len, n63c, n638 });
+    var shown: usize = 0;
+    for (sites) |s| {
+        if (s.disp != 0x63C and s.disp != 0x638) continue;
+        if (shown >= 8) break;
+        const func = Pdata.containingFunctionForRva(buf, sections, s.at_rva) catch continue;
+        std.debug.print("  cmp at={x} disp={x} func=[{x},{x})\n", .{ s.at_rva, s.disp, func.begin, func.end });
+        shown += 1;
+    }
+}
+
+test "live termsrv.dll: DefPolicy site validates (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    const f_off = Pe.rvaToOffset(sections, 0x6a52c) orelse return error.FuncUnmapped;
+    const f_end = Pe.rvaToOffset(sections, 0x6a66e) orelse return error.FuncEndUnmapped;
+    const site = Validate.findDefPolicySite(buf[f_off..f_end], 0x6a52c) orelse return error.SiteMissing;
+    std.debug.print("DefPolicy site: cmp={x} jcc={x} len={d}\n", .{ site.cmp_rva, site.jcc_rva, site.jcc_len });
+    try std.testing.expect(site.cmp_rva == 0x6a5c9);
+    try std.testing.expect(site.jcc_rva == 0x6a5d0);
+}

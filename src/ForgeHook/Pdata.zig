@@ -2,7 +2,10 @@ const std = @import("std");
 
 pub const RuntimeFunc = struct { begin: u32, end: u32, unwind: u32 };
 
-pub const PdataError = error{ BadTable, NoMatch };
+pub const PdataError = error{ BadTable, NoMatch, NoPdataDir, UnmappedTable };
+
+pub const Pe = @import("Pe");
+pub const NtHeaders = @import("NtHeaders");
 
 pub fn entryCount(dir_size: u32) usize {
     return dir_size / 12;
@@ -25,4 +28,16 @@ pub fn containingFunction(image: []const u8, table_off: usize, count: usize, rva
         if (rva >= f.begin and rva < f.end) return f;
     }
     return PdataError.NoMatch;
+}
+
+pub fn containingFunctionForRva(
+    image: []const u8,
+    sections: []const Pe.Section,
+    rva: u32,
+) PdataError!RuntimeFunc {
+    const info = NtHeaders.ntInfo(image) catch return PdataError.BadTable;
+    const dir = NtHeaders.dataDir(image, info, NtHeaders.exception_dir_index) catch return PdataError.NoPdataDir;
+    if (dir.size == 0 or dir.rva == 0) return PdataError.NoPdataDir;
+    const table_off = Pe.rvaToOffset(sections, dir.rva) orelse return PdataError.UnmappedTable;
+    return containingFunction(image, table_off, entryCount(dir.size), rva);
 }
