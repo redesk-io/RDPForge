@@ -17,7 +17,6 @@ pub fn build(b: *std.Build) void {
                 .optimize = .ReleaseSafe,
             }),
         });
-        hook.linkLibC();
         b.installArtifact(hook);
 
         const cli = b.addExecutable(.{
@@ -34,6 +33,26 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/ForgeHook/AutoFind.zig"),
         .target = b.graph.host,
     });
+    const args_mod = b.createModule(.{
+        .root_source_file = b.path("src/InstallerCli/Args.zig"),
+        .target = b.graph.host,
+    });
+    const plan_mod = b.createModule(.{
+        .root_source_file = b.path("src/InstallerCli/Plan.zig"),
+        .target = b.graph.host,
+    });
+    const installer_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/InstallerTest/main.zig"),
+            .target = b.graph.host,
+            .imports = &.{
+                .{ .name = "Args", .module = args_mod },
+                .{ .name = "Plan", .module = plan_mod },
+            },
+        }),
+    });
+    const run_installer_tests = b.addRunArtifact(installer_tests);
+    b.step("test-installer", "Run InstallerTest suite").dependOn(&run_installer_tests.step);
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tests/HookTest/main.zig"),
