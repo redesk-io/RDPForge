@@ -23,7 +23,7 @@ pub fn findAllAnchors(haystack: []const u8, needle: []const u8, out: []usize) []
 }
 
 pub const SiteAnchor = struct {
-    site: @import("AutoFind").Site,
+    site: @import("Site").Site,
     marker: []const u8,
 };
 

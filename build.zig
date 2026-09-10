@@ -71,8 +71,8 @@ pub fn build(b: *std.Build) void {
     });
     decode_mod.addIncludePath(b.path("third_party/zydis/include"));
     decode_mod.addIncludePath(b.path("third_party/zydis/dependencies/zycore/include"));
-    const autofind_mod = b.createModule(.{
-        .root_source_file = b.path("src/ForgeHook/AutoFind.zig"),
+    const site_mod = b.createModule(.{
+        .root_source_file = b.path("src/ForgeHook/Site.zig"),
         .target = b.graph.host,
     });
     const args_mod = b.createModule(.{
@@ -103,7 +103,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/ForgeHook/Anchors.zig"),
         .target = b.graph.host,
         .imports = &.{
-            .{ .name = "AutoFind", .module = autofind_mod },
+            .{ .name = "Site", .module = site_mod },
         },
     });
     const ntheaders_mod = b.createModule(.{
@@ -138,6 +138,19 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "Pe", .module = pe_mod },
             .{ .name = "NtHeaders", .module = ntheaders_mod },
+        },
+    });
+    const autofind_mod = b.createModule(.{
+        .root_source_file = b.path("src/ForgeHook/AutoFind.zig"),
+        .target = b.graph.host,
+        .imports = &.{
+            .{ .name = "Site", .module = site_mod },
+            .{ .name = "Pe", .module = pe_mod },
+            .{ .name = "Anchors", .module = anchors_mod },
+            .{ .name = "Decode", .module = decode_mod },
+            .{ .name = "Pdata", .module = pdata_mod },
+            .{ .name = "Xref", .module = xref_mod },
+            .{ .name = "Validate", .module = validate_mod },
         },
     });
     const unit_tests = b.addTest(.{

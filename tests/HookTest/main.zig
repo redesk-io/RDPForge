@@ -802,3 +802,28 @@ test "live termsrv.dll: CSLQuery func callers + MOV shapes (read-only)" {
     }
     std.debug.print("movmem-imm total={d} imm1-anydst total={d}\n", .{ mov_imm, mov_reg1 });
 }
+
+test "live termsrv.dll: discover() finds all three sites (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const rep = try AutoFind.discover(buf);
+    std.debug.print("discover: dp={?x} su={?x} lo={?x} (cands {d}/{d}/{d})\n", .{
+        if (rep.def_policy) |e| e.rva else null,
+        if (rep.single_user) |e| e.rva else null,
+        if (rep.local_only) |e| e.rva else null,
+        rep.def_policy_candidates,
+        rep.single_user_candidates,
+        rep.local_only_candidates,
+    });
+    try std.testing.expect(rep.def_policy != null);
+    try std.testing.expect(rep.def_policy.?.rva == 0x6a5d0);
+    try std.testing.expect(rep.single_user != null);
+    try std.testing.expect(rep.single_user.?.rva == 0xa6389);
+    try std.testing.expect(rep.local_only != null);
+    try std.testing.expect(rep.local_only.?.rva == 0xbbf1e);
+}
