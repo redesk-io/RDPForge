@@ -118,3 +118,85 @@ pub fn listCallsNear(code: []const u8, code_rva: u32, center_rva: u32, radius: u
     }
     return out[0..n];
 }
+
+pub const CallTo = struct { at_rva: u32 };
+
+pub fn findCallsTo(code: []const u8, code_rva: u32, target: u32, out: []CallTo) []CallTo {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < code.len and n < out.len) {
+        const full = Decode.decodeFull64(code[i..]) orelse {
+            i += 1;
+            continue;
+        };
+        if (full.length == 0) {
+            i += 1;
+            continue;
+        }
+        if (full.mnemonic == Decode.CALL) {
+            const at: u32 = code_rva + @as(u32, @intCast(i));
+            for (full.operands[0..full.op_count]) |op| {
+                if (op.type != Decode.OP_IMM) continue;
+                const t = Decode.ripTarget(at, full.length, op.unnamed_0.imm.value.s);
+                if (t == target) {
+                    out[n] = .{ .at_rva = at };
+                    n += 1;
+                    break;
+                }
+            }
+        }
+        i += full.length;
+    }
+    return out[0..n];
+}
+
+pub const VersionCheckSite = struct { call_rva: u32, jz_rva: u32, jz_len: u8 };
+
+pub fn findCallTestJz(code: []const u8, code_rva: u32) ?VersionCheckSite {
+    var i: usize = 0;
+    while (i < code.len) {
+        const call = Decode.decodeFull64(code[i..]) orelse {
+            i += 1;
+            continue;
+        };
+        if (call.length == 0) {
+            i += 1;
+            continue;
+        }
+        if (call.mnemonic == Decode.CALL) {
+            const call_rva: u32 = code_rva + @as(u32, @intCast(i));
+            var j: usize = i + call.length;
+            var scanned: usize = 0;
+            while (j < code.len and scanned < 48) {
+                const t = Decode.decodeFull64(code[j..]) orelse {
+                    j += 1;
+                    scanned += 1;
+                    continue;
+                };
+                if (t.length == 0) {
+                    j += 1;
+                    scanned += 1;
+                    continue;
+                }
+                if (t.mnemonic == Decode.TEST) {
+                    const n_off = j + t.length;
+                    if (n_off < code.len) {
+                        const n = Decode.decodeFull64(code[n_off..]) orelse break;
+                        if (n.length > 0 and (n.mnemonic == Decode.JZ or n.mnemonic == Decode.JNZ)) {
+                            return .{
+                                .call_rva = call_rva,
+                                .jz_rva = code_rva + @as(u32, @intCast(n_off)),
+                                .jz_len = n.length,
+                            };
+                        }
+                    }
+                    break;
+                }
+                j += t.length;
+                scanned += t.length;
+            }
+        }
+        i += call.length;
+    }
+    return null;
+}

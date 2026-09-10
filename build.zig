@@ -132,6 +132,14 @@ pub fn build(b: *std.Build) void {
             .{ .name = "Decode", .module = decode_mod },
         },
     });
+    const import_mod = b.createModule(.{
+        .root_source_file = b.path("src/ForgeHook/Import.zig"),
+        .target = b.graph.host,
+        .imports = &.{
+            .{ .name = "Pe", .module = pe_mod },
+            .{ .name = "NtHeaders", .module = ntheaders_mod },
+        },
+    });
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tests/HookTest/main.zig"),
@@ -145,6 +153,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "Pdata", .module = pdata_mod },
                 .{ .name = "Xref", .module = xref_mod },
                 .{ .name = "Validate", .module = validate_mod },
+                .{ .name = "Import", .module = import_mod },
             },
         }),
     });

@@ -413,3 +413,190 @@ test "live termsrv.dll: CALLs near LocalOnly LEAs (read-only)" {
         }
     }
 }
+
+test "live termsrv.dll: import census for memset/VerifyVersionInfoW (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Import = @import("Import");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    var out: [8]Import.Import = undefined;
+    const memset = try Import.findSymbol(buf, sections, "crt-string", "memset", &out);
+    std.debug.print("memset imports: {d}\n", .{memset.len});
+    for (memset) |m| std.debug.print("  iat_rva={x}\n", .{m.iat_rva});
+    var out2: [8]Import.Import = undefined;
+    const vv = try Import.findSymbol(buf, sections, "kernel32", "VerifyVersionInfoW", &out2);
+    std.debug.print("VerifyVersionInfoW imports: {d}\n", .{vv.len});
+    for (vv) |m| std.debug.print("  iat_rva={x}\n", .{m.iat_rva});
+    var out3: [8]Import.Import = undefined;
+    const vv2 = try Import.findSymbol(buf, sections, "", "VerifyVersionInfoW", &out3);
+    std.debug.print("VerifyVersionInfoW (any dll): {d}\n", .{vv2.len});
+}
+
+test "live termsrv.dll: memset/VerifyVersion thunks and callers (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    const Import = @import("Import");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    var text_name: [8]u8 = [_]u8{0} ** 8;
+    @memcpy(text_name[0..5], ".text");
+    const text = Pe.findSection(sections, &text_name) orelse return error.MissingText;
+    const code = buf[text.raw_ptr .. text.raw_ptr + text.raw_size];
+    var out: [4]Import.Import = undefined;
+    const memset = (try Import.findSymbol(buf, sections, "crt-string", "memset", &out))[0];
+    const vv = (try Import.findSymbol(buf, sections, "", "VerifyVersionInfoW", &out))[0];
+    var thunks: [64]Xref.Xref = undefined;
+    for ([_]u32{ memset.iat_rva, vv.iat_rva }) |iat| {
+        const refs = Xref.scanRipXrefs(code, text.virtual_address, iat, &thunks);
+        std.debug.print("iat {x}: refs={d}\n", .{ iat, refs.len });
+        for (refs) |r| {
+            var callers: [256]Validate.CallTo = undefined;
+            const cs = Validate.findCallsTo(code, text.virtual_address, r.at_rva, &callers);
+            std.debug.print("  ref at={x} callers={d}\n", .{ r.at_rva, cs.len });
+            for (cs) |c| {
+                const func = Pdata.containingFunctionForRva(buf, sections, c.at_rva) catch continue;
+                std.debug.print("    call at={x} func=[{x},{x})\n", .{ c.at_rva, func.begin, func.end });
+            }
+        }
+    }
+}
+
+test "live termsrv.dll: memset x VerifyVersion caller intersection (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    const Import = @import("Import");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    var text_name: [8]u8 = [_]u8{0} ** 8;
+    @memcpy(text_name[0..5], ".text");
+    const text = Pe.findSection(sections, &text_name) orelse return error.MissingText;
+    const code = buf[text.raw_ptr .. text.raw_ptr + text.raw_size];
+    var out: [4]Import.Import = undefined;
+    const memset = (try Import.findSymbol(buf, sections, "crt-string", "memset", &out))[0];
+    const vv = (try Import.findSymbol(buf, sections, "", "VerifyVersionInfoW", &out))[0];
+    var thunks: [64]Xref.Xref = undefined;
+    const mrefs = Xref.scanRipXrefs(code, text.virtual_address, memset.iat_rva, &thunks);
+    try std.testing.expect(mrefs.len == 1);
+    var vthunks: [64]Xref.Xref = undefined;
+    const vrefs = Xref.scanRipXrefs(code, text.virtual_address, vv.iat_rva, &vthunks);
+    var vcall_sites: [64]u32 = undefined;
+    var nv: usize = 0;
+    for (vrefs) |r| {
+        const off = Pe.rvaToOffset(sections, r.at_rva) orelse continue;
+        const full = Decode.decodeFull64(buf[off..][0..16]) orelse continue;
+        std.debug.print("vv ref at={x} mnem={d}\n", .{ r.at_rva, full.mnemonic });
+        if (full.mnemonic == Decode.CALL and nv < vcall_sites.len) {
+            vcall_sites[nv] = r.at_rva;
+            nv += 1;
+        }
+    }
+    var mcallers: [512]Validate.CallTo = undefined;
+    const mcs = Validate.findCallsTo(code, text.virtual_address, mrefs[0].at_rva, &mcallers);
+    std.debug.print("memset callers={d} vv direct-calls={d}\n", .{ mcs.len, nv });
+    for (mcs) |mc| {
+        const mf = Pdata.containingFunctionForRva(buf, sections, mc.at_rva) catch continue;
+        for (vcall_sites[0..nv]) |vc_at| {
+            const vf = Pdata.containingFunctionForRva(buf, sections, vc_at) catch continue;
+            if (mf.begin == vf.begin) {
+                std.debug.print("SHARED func=[{x},{x}) memset-call={x} vv-call={x}\n", .{ mf.begin, mf.end, mc.at_rva, vc_at });
+            }
+        }
+    }
+}
+
+test "live termsrv.dll: SingleUser candidate tails (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    std.debug.print("CALL={d} JZ={d} JNZ={d} TEST={d} CMP={d} MOV={d}\n", .{ Decode.CALL, Decode.JZ, Decode.JNZ, Decode.TEST, Decode.CMP, 505 });
+    for ([_]u32{ 0x91eb2, 0x91ed5, 0xa637b }) |vc| {
+        const off = Pe.rvaToOffset(sections, vc) orelse continue;
+        std.debug.print("--- tail at {x} ---\n", .{vc});
+        var i: usize = 0;
+        var shown: usize = 0;
+        while (i < 96 and shown < 14) {
+            const full = Decode.decodeFull64(buf[off + i .. off + 128]) orelse {
+                i += 1;
+                continue;
+            };
+            if (full.length == 0) {
+                i += 1;
+                continue;
+            }
+            std.debug.print("  {x}: mnem={d} len={d}\n", .{ vc + @as(u32, @intCast(i)), full.mnemonic, full.length });
+            i += full.length;
+            shown += 1;
+        }
+    }
+}
+
+test "live termsrv.dll: IsSingleSessionPerUser string xrefs (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    var text_name: [8]u8 = [_]u8{0} ** 8;
+    @memcpy(text_name[0..5], ".text");
+    const text = Pe.findSection(sections, &text_name) orelse return error.MissingText;
+    const code = buf[text.raw_ptr .. text.raw_ptr + text.raw_size];
+    var occ: [16]usize = undefined;
+    const all = Anchors.findAllAnchors(buf, "IsSingleSessionPerUser", &occ);
+    std.debug.print("IsSingleSessionPerUser occurrences={d}\n", .{all.len});
+    for (all) |off| {
+        const rva = Pe.offsetToRva(sections, off) orelse continue;
+        var out: [256]Xref.Xref = undefined;
+        const found = Xref.scanRipXrefs(code, text.virtual_address, rva, &out);
+        std.debug.print("  off={x} rva={x} xrefs={d}\n", .{ off, rva, found.len });
+        for (found) |x| {
+            const func = Pdata.containingFunctionForRva(buf, sections, x.at_rva) catch continue;
+            std.debug.print("    xref at={x} func=[{x},{x})\n", .{ x.at_rva, func.begin, func.end });
+        }
+    }
+}
+
+test "live termsrv.dll: SingleUser CALL-TEST-JZ site (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    const f_off = Pe.rvaToOffset(sections, 0xa62d4) orelse return error.FuncUnmapped;
+    const f_end = Pe.rvaToOffset(sections, 0xa6555) orelse return error.FuncEndUnmapped;
+    const site = Validate.findCallTestJz(buf[f_off..f_end], 0xa62d4) orelse return error.SiteMissing;
+    std.debug.print("SingleUser site: call={x} jz={x} len={d}\n", .{ site.call_rva, site.jz_rva, site.jz_len });
+    try std.testing.expect(site.jz_rva == 0xa6389);
+}
