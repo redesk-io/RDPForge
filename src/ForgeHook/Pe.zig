@@ -59,3 +59,12 @@ pub fn rvaToOffset(sections: []const Section, rva: u32) ?usize {
     }
     return null;
 }
+
+pub fn offsetToRva(sections: []const Section, off: usize) ?u32 {
+    for (sections) |s| {
+        if (off >= s.raw_ptr and off < @as(usize, s.raw_ptr) + s.raw_size) {
+            return s.virtual_address + @as(u32, @intCast(off - s.raw_ptr));
+        }
+    }
+    return null;
+}

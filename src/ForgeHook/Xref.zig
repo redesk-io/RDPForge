@@ -1,4 +1,5 @@
 const std = @import("std");
+const Decode = @import("Decode");
 
 pub const Xref = struct { at_rva: u32, target_rva: u32 };
 
@@ -53,6 +54,33 @@ pub fn scanPrologues(code: []const u8, code_rva: u32, out: []u32) []u32 {
             n += 1;
             i += prologue_x86.len - 1;
         }
+    }
+    return out[0..n];
+}
+
+pub fn scanRipXrefs(code: []const u8, code_rva: u32, want_target: u32, out: []Xref) []Xref {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < code.len and n < out.len) {
+        const full = Decode.decodeFull64(code[i..]) orelse {
+            i += 1;
+            continue;
+        };
+        if (full.length == 0) {
+            i += 1;
+            continue;
+        }
+        const at: u32 = code_rva + @as(u32, @intCast(i));
+        for (full.operands[0..full.op_count]) |op| {
+            if (op.type != Decode.OP_MEM) continue;
+            if (op.unnamed_0.mem.base != Decode.RIP_REG) continue;
+            if (Decode.ripTarget(at, full.length, op.unnamed_0.mem.disp.value) == want_target) {
+                out[n] = .{ .at_rva = at, .target_rva = want_target };
+                n += 1;
+                break;
+            }
+        }
+        i += full.length;
     }
     return out[0..n];
 }

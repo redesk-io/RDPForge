@@ -127,3 +127,42 @@ test "live termsrv.dll headers + anchor (read-only, skipped if absent)" {
     try std.testing.expect(Anchors.findAnchor(buf[0..n], "CDefPolicy::Query", 1) != null);
     try std.testing.expect(Anchors.findAnchor(buf[0..n], "IsSingleSessionPerUser", 1) != null);
 }
+
+test "scanRipXrefs finds planted LEA xref" {
+    var code: [32]u8 = [_]u8{0x90} ** 32;
+    code[4] = 0x48;
+    code[5] = 0x8D;
+    code[6] = 0x0D;
+    const code_rva: u32 = 0x1000;
+    const want: u32 = 0x2000;
+    const disp: i32 = @as(i32, @bitCast(want)) - (@as(i32, @bitCast(code_rva)) + 4 + 7);
+    std.mem.writeInt(i32, code[7..][0..4], disp, .little);
+    var out: [8]Xref.Xref = undefined;
+    const found = Xref.scanRipXrefs(&code, code_rva, want, &out);
+    try std.testing.expect(found.len == 1);
+    try std.testing.expect(found[0].at_rva == code_rva + 4);
+    const none = Xref.scanRipXrefs(&code, code_rva, 0x9999, &out);
+    try std.testing.expect(none.len == 0);
+}
+
+test "live termsrv.dll: RIP xrefs to CDefPolicy::Query string (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    const anchor_off = Anchors.findAnchor(buf, "CDefPolicy::Query", 1) orelse return error.AnchorMissing;
+    const anchor_rva = Pe.offsetToRva(sections, anchor_off) orelse return error.AnchorUnmapped;
+    var text_name: [8]u8 = [_]u8{0} ** 8;
+    @memcpy(text_name[0..5], ".text");
+    const text = Pe.findSection(sections, &text_name) orelse return error.MissingText;
+    const code = buf[text.raw_ptr .. text.raw_ptr + text.raw_size];
+    var out: [4096]Xref.Xref = undefined;
+    const found = Xref.scanRipXrefs(code, text.virtual_address, anchor_rva, &out);
+    std.debug.print("xrefs to CDefPolicy::Query: {d}\n", .{found.len});
+    try std.testing.expect(found.len > 0);
+}

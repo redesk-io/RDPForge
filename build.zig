@@ -117,6 +117,9 @@ pub fn build(b: *std.Build) void {
     const xref_mod = b.createModule(.{
         .root_source_file = b.path("src/ForgeHook/Xref.zig"),
         .target = b.graph.host,
+        .imports = &.{
+            .{ .name = "Decode", .module = decode_mod },
+        },
     });
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
