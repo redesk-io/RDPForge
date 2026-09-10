@@ -95,6 +95,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_installer_tests = b.addRunArtifact(installer_tests);
     b.step("test-installer", "Run InstallerTest suite").dependOn(&run_installer_tests.step);
+    const pe_mod = b.createModule(.{
+        .root_source_file = b.path("src/ForgeHook/Pe.zig"),
+        .target = b.graph.host,
+    });
+    const anchors_mod = b.createModule(.{
+        .root_source_file = b.path("src/ForgeHook/Anchors.zig"),
+        .target = b.graph.host,
+        .imports = &.{
+            .{ .name = "AutoFind", .module = autofind_mod },
+        },
+    });
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tests/HookTest/main.zig"),
@@ -102,6 +113,8 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "AutoFind", .module = autofind_mod },
                 .{ .name = "Decode", .module = decode_mod },
+                .{ .name = "Pe", .module = pe_mod },
+                .{ .name = "Anchors", .module = anchors_mod },
             },
         }),
     });

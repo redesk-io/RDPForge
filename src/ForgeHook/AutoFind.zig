@@ -6,8 +6,16 @@ pub const Emission = struct {
     len: u8,
 };
 
+pub const DiscoveryResult = enum { found, miss, validation_fail };
+
 pub fn run() void {}
 
 pub fn validateEmission(e: Emission) bool {
     return e.len <= 16;
+}
+
+pub fn classify(found_anchor: bool, valid_shape: bool) DiscoveryResult {
+    if (!found_anchor) return .miss;
+    if (!valid_shape) return .validation_fail;
+    return .found;
 }
