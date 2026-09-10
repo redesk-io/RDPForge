@@ -207,7 +207,9 @@ pub fn build(b: *std.Build) void {
             }),
         });
         hook.linkLibrary(zydis);
-        b.installArtifact(hook);
+        const triple = std.fmt.allocPrint(b.allocator, "{s}-windows-gnu", .{@tagName(t.cpu_arch.?)}) catch @panic("oom");
+        const hook_sub = std.fmt.allocPrint(b.allocator, "{s}/ForgeHook.dll", .{triple}) catch @panic("oom");
+        b.getInstallStep().dependOn(&b.addInstallArtifact(hook, .{ .dest_sub_path = hook_sub }).step);
 
         const cli = b.addExecutable(.{
             .name = "InstallerCli",
@@ -221,7 +223,8 @@ pub fn build(b: *std.Build) void {
                 },
             }),
         });
-        b.installArtifact(cli);
+        const cli_sub = std.fmt.allocPrint(b.allocator, "{s}/InstallerCli.exe", .{triple}) catch @panic("oom");
+        b.getInstallStep().dependOn(&b.addInstallArtifact(cli, .{ .dest_sub_path = cli_sub }).step);
     }
     const host = b.graph.host;
     const hm = modules(b, host, .Debug);

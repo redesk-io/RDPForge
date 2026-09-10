@@ -1,0 +1,46 @@
+name: build
+
+on:
+  push:
+    branches: [main, develop, "feat/**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  zig-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - run: zig build test --summary all
+      - run: zig build test-installer --summary all
+
+  zig-cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - run: zig build --summary all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-binaries
+          path: zig-out/
+
+  gui:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - run: msbuild src/ManagerGui/ManagerGui.csproj -p:Configuration=Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manager-gui
+          path: src/ManagerGui/bin/Release/
