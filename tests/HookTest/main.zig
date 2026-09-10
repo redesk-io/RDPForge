@@ -700,3 +700,105 @@ test "live termsrv.dll: LocalOnly heuristic top-rank (read-only)" {
     std.debug.print("LocalOnly top: jz={x} len={d} dist={d} of {d}\n", .{ ordered[0].site.jz_rva, ordered[0].site.jz_len, ordered[0].dist, ordered.len });
     try std.testing.expect(ordered[0].site.jz_rva == 0xbbf1e);
 }
+
+test "live termsrv.dll: SLInit anchor xref census (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    var text_name: [8]u8 = [_]u8{0} ** 8;
+    @memcpy(text_name[0..5], ".text");
+    const text = Pe.findSection(sections, &text_name) orelse return error.MissingText;
+    const code = buf[text.raw_ptr .. text.raw_ptr + text.raw_size];
+    const markers = [_][]const u8{ "CSLQuery::Initialize", "bRemoteConnAllowed" };
+    for (markers) |m| {
+        var occ: [16]usize = undefined;
+        const all = Anchors.findAllAnchors(buf, m, &occ);
+        std.debug.print("{s}: occurrences={d}\n", .{ m, all.len });
+        for (all) |off| {
+            const rva = Pe.offsetToRva(sections, off) orelse continue;
+            var out: [256]Xref.Xref = undefined;
+            const found = Xref.scanRipXrefs(code, text.virtual_address, rva, &out);
+            std.debug.print("  off={x} rva={x} xrefs={d}\n", .{ off, rva, found.len });
+            for (found) |x| {
+                const func = Pdata.containingFunctionForRva(buf, sections, x.at_rva) catch continue;
+                std.debug.print("    xref at={x} func=[{x},{x})\n", .{ x.at_rva, func.begin, func.end });
+            }
+        }
+    }
+}
+
+test "live termsrv.dll: MOV [RIP],1 census in CSLQuery func (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    const f_off = Pe.rvaToOffset(sections, 0xba448) orelse return error.FuncUnmapped;
+    const f_end = Pe.rvaToOffset(sections, 0xbbb65) orelse return error.FuncEndUnmapped;
+    var out: [64]Validate.GlobalInit = undefined;
+    const inits = Validate.listMovMemImm1(buf[f_off..f_end], 0xba448, &out);
+    std.debug.print("global-inits in func: {d}\n", .{inits.len});
+    for (inits) |g| std.debug.print("  mov at={x} -> global {x}\n", .{ g.at_rva, g.target_rva });
+}
+
+test "live termsrv.dll: CSLQuery func callers + MOV shapes (read-only)" {
+    const path = "/mnt/c/Windows/System32/termsrv.dll";
+    const file = std.fs.openFileAbsolute(path, .{}) catch return;
+    defer file.close();
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const buf = try file.readToEndAlloc(gpa.allocator(), 8 * 1024 * 1024);
+    defer gpa.allocator().free(buf);
+    const Validate = @import("Validate");
+    var secs: [16]Pe.Section = undefined;
+    const sections = try Pe.parseSections(buf, &secs);
+    var text_name: [8]u8 = [_]u8{0} ** 8;
+    @memcpy(text_name[0..5], ".text");
+    const text = Pe.findSection(sections, &text_name) orelse return error.MissingText;
+    const code = buf[text.raw_ptr .. text.raw_ptr + text.raw_size];
+    var callers: [64]Validate.CallTo = undefined;
+    const cs = Validate.findCallsTo(code, text.virtual_address, 0xba448, &callers);
+    std.debug.print("callers of ba448: {d}\n", .{cs.len});
+    for (cs) |c| {
+        const func = Pdata.containingFunctionForRva(buf, sections, c.at_rva) catch continue;
+        std.debug.print("  call at={x} from func=[{x},{x})\n", .{ c.at_rva, func.begin, func.end });
+    }
+    const f_off = Pe.rvaToOffset(sections, 0xba448) orelse return error.FuncUnmapped;
+    const f_end = Pe.rvaToOffset(sections, 0xbbb65) orelse return error.FuncEndUnmapped;
+    const fcode = buf[f_off..f_end];
+    var i: usize = 0;
+    var mov_imm: usize = 0;
+    var mov_reg1: usize = 0;
+    while (i < fcode.len) {
+        const full = Decode.decodeFull64(fcode[i..]) orelse {
+            i += 1;
+            continue;
+        };
+        if (full.length == 0) {
+            i += 1;
+            continue;
+        }
+        if (full.mnemonic == Decode.MOV and full.op_count >= 2) {
+            const dst = full.operands[0];
+            const src = full.operands[1];
+            if (dst.type == Decode.OP_MEM and src.type == Decode.OP_IMM) {
+                mov_imm += 1;
+                std.debug.print("  movmem at={x} imm={d}\n", .{ 0xba448 + @as(u32, @intCast(i)), src.unnamed_0.imm.value.u });
+            }
+            if (src.type == Decode.OP_IMM and src.unnamed_0.imm.value.u == 1) mov_reg1 += 1;
+        }
+        i += full.length;
+    }
+    std.debug.print("movmem-imm total={d} imm1-anydst total={d}\n", .{ mov_imm, mov_reg1 });
+}

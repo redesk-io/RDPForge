@@ -286,3 +286,36 @@ pub fn rankByLeaProximity(sites: []const VersionCheckSite, leas: []const u32, ou
     }
     return out[0..n];
 }
+
+pub const GlobalInit = struct { at_rva: u32, target_rva: u32 };
+
+pub fn listMovMemImm1(code: []const u8, code_rva: u32, out: []GlobalInit) []GlobalInit {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < code.len and n < out.len) {
+        const full = Decode.decodeFull64(code[i..]) orelse {
+            i += 1;
+            continue;
+        };
+        if (full.length == 0) {
+            i += 1;
+            continue;
+        }
+        if (full.mnemonic == Decode.MOV and full.op_count >= 2) {
+            const dst = full.operands[0];
+            const src = full.operands[1];
+            if (dst.type == Decode.OP_MEM and src.type == Decode.OP_IMM and src.unnamed_0.imm.value.u == 1) {
+                if (dst.unnamed_0.mem.base == Decode.RIP_REG) {
+                    const at: u32 = code_rva + @as(u32, @intCast(i));
+                    out[n] = .{
+                        .at_rva = at,
+                        .target_rva = Decode.ripTarget(at, full.length, dst.unnamed_0.mem.disp.value),
+                    };
+                    n += 1;
+                }
+            }
+        }
+        i += full.length;
+    }
+    return out[0..n];
+}
