@@ -1,6 +1,5 @@
 using System;
 using System.Diagnostics;
-using System.IO;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -38,17 +37,15 @@ namespace RDPForge
             }
             if (mapped == null)
             {
-                Console.WriteLine("usage: ManagerGui [-install|-uninstall|-restart|-check]");
+                Console.WriteLine("usage: ManagerGui [-install [-o]| -uninstall [-k] | -restart | -check]");
                 return 2;
             }
+            var rest = args.Length > 1 ? " " + string.Join(" ", args, 1, args.Length - 1) : string.Empty;
             try
             {
-                var dir = Path.GetDirectoryName(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location) ?? string.Empty;
-                var psi = new ProcessStartInfo(Path.Combine(dir, "InstallerCli.exe"), mapped)
+                var psi = new ProcessStartInfo(InstallerRunner.ExePath(), mapped + rest)
                 {
                     UseShellExecute = false,
-                    Verb = "runas",
                 };
                 using (var p = Process.Start(psi))
                 {

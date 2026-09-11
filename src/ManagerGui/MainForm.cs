@@ -24,7 +24,10 @@ namespace RDPForge
         readonly Button btnApply = new Button { Left = 120, Top = 158, Width = 100, Text = "Apply" };
         readonly Button btnTest = new Button { Left = 228, Top = 158, Width = 110, Text = "Test 127.0.0.2" };
         readonly Button btnRestart = new Button { Left = 346, Top = 158, Width = 120, Text = "Restart service" };
-        readonly Button btnUsers = new Button { Left = 12, Top = 188, Width = 120, Text = "Users..." };
+        readonly Button btnUsers = new Button { Left = 12, Top = 188, Width = 100, Text = "Users..." };
+        readonly Button btnInstall = new Button { Left = 120, Top = 188, Width = 100, Text = "Install" };
+        readonly CheckBox chkOverwrite = new CheckBox { Left = 228, Top = 190, Width = 100, Text = "overwrite" };
+        readonly Button btnUninstall = new Button { Left = 336, Top = 188, Width = 130, Text = "Uninstall" };
         readonly TextBox txtLog = new TextBox { Left = 12, Top = 218, Width = 454, Height = 150, Multiline = true, ScrollBars = ScrollBars.Vertical, ReadOnly = true, Font = new Font(FontFamily.GenericMonospace, 8) };
         readonly Timer timer = new Timer { Interval = 1000 };
 
@@ -41,11 +44,14 @@ namespace RDPForge
                 lblWrapper, lblService, lblListener, lblVersion, lblPatch,
                 chkConnections, chkSingleSession, chkLegacy, chkCamera, chkUsb,
                 cmbNla, cmbShadow,
-                numPort, btnApply, btnTest, btnRestart, btnUsers, txtLog });
+                numPort, btnApply, btnTest, btnRestart,
+                btnUsers, btnInstall, chkOverwrite, btnUninstall, txtLog });
             btnApply.Click += (s, e) => ApplySettings();
             btnTest.Click += (s, e) => LoopbackTest();
             btnRestart.Click += (s, e) => RestartService();
             btnUsers.Click += (s, e) => ManageUsers();
+            btnInstall.Click += (s, e) => InstallWrapper();
+            btnUninstall.Click += (s, e) => UninstallWrapper();
             timer.Tick += (s, e) => RefreshAll();
             timer.Start();
             RefreshAll();
@@ -137,6 +143,63 @@ namespace RDPForge
         {
             try { Process.Start("lusrmgr.msc"); }
             catch (Exception ex) { Error(ex.Message); }
+        }
+
+        void InstallWrapper()
+        {
+            if (!RequireCli()) return;
+            SetBusy(true);
+            try
+            {
+                var args = chkOverwrite.Checked ? "-i -o" : "-i";
+                var r = InstallerRunner.Run(args);
+                if (InstallerRunner.IsThirdPartyRefusal(r))
+                {
+                    var overwrite = MessageBox.Show(
+                        "Another wrapper owns ServiceDll:\n\n" + r.Output +
+                        "\n\nOverwrite it with ForgeHook?",
+                        "RDPForge", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                    if (overwrite == DialogResult.Yes)
+                    {
+                        chkOverwrite.Checked = true;
+                        r = InstallerRunner.Run("-i -o");
+                    }
+                }
+                if (r.ExitCode == 0) RefreshAll();
+                else Error(string.IsNullOrEmpty(r.Output) ? "install failed" : r.Output);
+            }
+            finally { SetBusy(false); }
+        }
+
+        void UninstallWrapper()
+        {
+            if (!RequireCli()) return;
+            var confirm = MessageBox.Show(
+                "Restore stock termsrv.dll and remove ForgeHook?",
+                "RDPForge", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (confirm != DialogResult.Yes) return;
+            SetBusy(true);
+            try
+            {
+                var r = InstallerRunner.Run("-u");
+                if (r.ExitCode == 0) RefreshAll();
+                else Error(string.IsNullOrEmpty(r.Output) ? "uninstall failed" : r.Output);
+            }
+            finally { SetBusy(false); }
+        }
+
+        bool RequireCli()
+        {
+            if (InstallerRunner.Available()) return true;
+            Error("InstallerCli.exe not found next to ManagerGui.exe");
+            return false;
+        }
+
+        void SetBusy(bool busy)
+        {
+            Cursor = busy ? Cursors.WaitCursor : Cursors.Default;
+            foreach (var c in new Control[] { btnInstall, btnUninstall, btnApply, btnRestart })
+                c.Enabled = !busy;
         }
 
         void ShowLog(string text)
