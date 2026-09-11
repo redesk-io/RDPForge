@@ -14,11 +14,12 @@ export fn DllMain(hinst: windows.HINSTANCE, reason: u32, _: ?*anyopaque) callcon
 }
 
 fn hookInit() void {
+    Patch.trace("event=HOOK_INIT");
     if (Patch.hookInit()) |rep| {
-        _ = rep;
-        Patch.trace("RDPForge: discover ok");
+        const full = rep.def_policy != null and rep.single_user != null and rep.local_only != null;
+        Patch.trace(if (full) "event=BOOT result=patched" else "event=BOOT result=partial");
     } else |_| {
-        Patch.trace("RDPForge: boot unpatched");
+        Patch.trace("event=BOOT result=failed");
     }
 }
 

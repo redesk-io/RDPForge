@@ -111,6 +111,27 @@ pub fn trace(msg: []const u8) void {
     @memcpy(buf[0..n], msg[0..n]);
     buf[n] = 0;
     OutputDebugStringA(buf[0..n :0]);
+    appendLog(buf[0..n]);
+}
+
+pub fn traceFmt(comptime fmt: []const u8, args: anytype) void {
+    if (comptime !windows_only) return;
+    var buf: [256]u8 = [_]u8{0} ** 256;
+    const line = std.fmt.bufPrint(buf[0..250], fmt, args) catch return;
+    buf[line.len] = 0;
+    OutputDebugStringA(buf[0..line.len :0]);
+    appendLog(line);
+}
+
+fn appendLog(line: []const u8) void {
+    std.fs.cwd().makePath("C:\\ProgramData\\RDPForge") catch return;
+    const path = "C:\\ProgramData\\RDPForge\\forge.log";
+    const f = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch
+        std.fs.cwd().createFile(path, .{}) catch return;
+    defer f.close();
+    f.seekFromEnd(0) catch return;
+    f.writeAll(line) catch {};
+    f.writeAll("\r\n") catch {};
 }
 
 fn systemTermsrvPath(out: []u16) ?[:0]u16 {
@@ -137,14 +158,26 @@ pub fn hookInit() PatchError!AutoFind.Report {
     var handle = GetModuleHandleW(path.ptr);
     if (handle == null) handle = LoadLibraryExW(path.ptr, null, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (handle == null) {
-        trace("RDPForge: termsrv load failed");
+        trace("event=TERMSRV_LOAD_FAIL");
         return PatchError.LoadFailed;
     }
     const size = loadedImageSize(handle.?) orelse return PatchError.BadImage;
     const image: []const u8 = @as([*]const u8, @ptrCast(handle.?))[0..size];
+    trace("event=AUTOFIND_BEGIN");
     const rep = AutoFind.discover(image) catch return PatchError.BadImage;
+    logSite("def_policy", rep.def_policy);
+    logSite("single_user", rep.single_user);
+    logSite("local_only", rep.local_only);
     const n = suspendOtherThreads() catch 0;
     defer _ = resumeOtherThreads() catch 0;
-    _ = n;
+    traceFmt("event=PATCHED suspended={d}", .{n});
     return rep;
+}
+
+fn logSite(name: []const u8, emission: ?AutoFind.Emission) void {
+    if (emission) |e| {
+        traceFmt("event=SITE_FOUND site={s} rva={x} len={d}", .{ name, e.rva, e.len });
+    } else {
+        traceFmt("event=SITE_MISS site={s}", .{name});
+    }
 }

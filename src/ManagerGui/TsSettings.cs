@@ -21,6 +21,18 @@ namespace RDPForge
                 .OpenSubKey(RdpTcp, writable);
         }
 
+        static RegistryKey CreatePolicyTs()
+        {
+            return RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)
+                .CreateSubKey(PolicyTs);
+        }
+
+        static RegistryKey CreatePolicyClient()
+        {
+            return RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)
+                .CreateSubKey(PolicyTs + @"\Client");
+        }
+
         public static bool GetAllowConnections()
         {
             using (var key = OpenTs(false))
@@ -43,8 +55,7 @@ namespace RDPForge
         {
             using (var key = OpenTs(true))
                 key?.SetValue("fSingleSessionPerUser", single ? 1 : 0, RegistryValueKind.DWord);
-            using (var pol = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)
-                .OpenSubKey(PolicyTs, true))
+            using (var pol = CreatePolicyTs())
                 pol?.SetValue("fSingleSessionPerUser", single ? 1 : 0, RegistryValueKind.DWord);
         }
 
@@ -96,9 +107,53 @@ namespace RDPForge
         {
             using (var key = OpenRdpTcp(true))
                 key?.SetValue("Shadow", value, RegistryValueKind.DWord);
-            using (var pol = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)
-                .OpenSubKey(PolicyTs, true))
+            using (var pol = CreatePolicyTs())
                 pol?.SetValue("Shadow", value, RegistryValueKind.DWord);
+        }
+
+        public static bool GetHonorLegacy()
+        {
+            using (var key = OpenTs(false))
+                return Convert.ToInt32(key?.GetValue("HonorLegacySettings", 0) ?? 0) == 1;
+        }
+
+        public static void SetHonorLegacy(bool honor)
+        {
+            using (var key = OpenTs(true))
+                key?.SetValue("HonorLegacySettings", honor ? 1 : 0, RegistryValueKind.DWord);
+        }
+
+        public static bool GetCameraAllowed()
+        {
+            using (var pol = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)
+                .OpenSubKey(PolicyTs, false))
+                return Convert.ToInt32(pol?.GetValue("fDisableCam", 0) ?? 0) == 0;
+        }
+
+        public static void SetCameraAllowed(bool allow)
+        {
+            using (var pol = CreatePolicyTs())
+                pol?.SetValue("fDisableCam", allow ? 0 : 1, RegistryValueKind.DWord);
+        }
+
+        public static bool GetUsbForUsers()
+        {
+            using (var pol = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)
+                .OpenSubKey(PolicyTs + @"\Client", false))
+            {
+                var v = pol?.GetValue("fUsbRedirectionEnableMode");
+                return v != null && Convert.ToInt32(v) == 2;
+            }
+        }
+
+        public static void SetUsbForUsers(bool users)
+        {
+            using (var pol = CreatePolicyClient())
+            {
+                if (pol == null) return;
+                if (users) pol.SetValue("fUsbRedirectionEnableMode", 2, RegistryValueKind.DWord);
+                else pol.DeleteValue("fUsbRedirectionEnableMode", false);
+            }
         }
     }
 }

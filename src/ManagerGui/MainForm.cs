@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
-using System.IO;
 using System.ServiceProcess;
 using System.Windows.Forms;
 
@@ -10,11 +9,15 @@ namespace RDPForge
     public class MainForm : Form
     {
         readonly Label lblWrapper = new Label { Left = 12, Top = 12, Width = 460 };
-        readonly Label lblService = new Label { Left = 12, Top = 34, Width = 460 };
-        readonly Label lblListener = new Label { Left = 12, Top = 56, Width = 460 };
-        readonly Label lblVersion = new Label { Left = 12, Top = 78, Width = 460 };
-        readonly CheckBox chkConnections = new CheckBox { Left = 12, Top = 106, Width = 260, Text = "Allow RDP connections" };
-        readonly CheckBox chkSingleSession = new CheckBox { Left = 280, Top = 106, Width = 200, Text = "Single session per user" };
+        readonly Label lblService = new Label { Left = 12, Top = 34, Width = 220 };
+        readonly Label lblListener = new Label { Left = 240, Top = 34, Width = 232 };
+        readonly Label lblVersion = new Label { Left = 12, Top = 56, Width = 220 };
+        readonly Label lblPatch = new Label { Left = 240, Top = 56, Width = 232 };
+        readonly CheckBox chkConnections = new CheckBox { Left = 12, Top = 82, Width = 200, Text = "Allow RDP connections" };
+        readonly CheckBox chkSingleSession = new CheckBox { Left = 220, Top = 82, Width = 200, Text = "Single session per user" };
+        readonly CheckBox chkLegacy = new CheckBox { Left = 12, Top = 104, Width = 200, Text = "Honor legacy settings" };
+        readonly CheckBox chkCamera = new CheckBox { Left = 220, Top = 104, Width = 120, Text = "Camera redir." };
+        readonly CheckBox chkUsb = new CheckBox { Left = 348, Top = 104, Width = 120, Text = "USB for users" };
         readonly ComboBox cmbNla = new ComboBox { Left = 12, Top = 132, Width = 200, DropDownStyle = ComboBoxStyle.DropDownList };
         readonly ComboBox cmbShadow = new ComboBox { Left = 220, Top = 132, Width = 240, DropDownStyle = ComboBoxStyle.DropDownList };
         readonly NumericUpDown numPort = new NumericUpDown { Left = 12, Top = 160, Width = 100, Minimum = 1, Maximum = 65535 };
@@ -35,21 +38,28 @@ namespace RDPForge
                 "0 - Disable", "1 - Full control with permission",
                 "2 - Full control", "3 - View with permission", "4 - View" });
             Controls.AddRange(new Control[] {
-                lblWrapper, lblService, lblListener, lblVersion,
-                chkConnections, chkSingleSession, cmbNla, cmbShadow,
+                lblWrapper, lblService, lblListener, lblVersion, lblPatch,
+                chkConnections, chkSingleSession, chkLegacy, chkCamera, chkUsb,
+                cmbNla, cmbShadow,
                 numPort, btnApply, btnTest, btnRestart, btnUsers, txtLog });
             btnApply.Click += (s, e) => ApplySettings();
             btnTest.Click += (s, e) => LoopbackTest();
             btnRestart.Click += (s, e) => RestartService();
             btnUsers.Click += (s, e) => ManageUsers();
-            timer.Tick += (s, e) => { RefreshDiagnostics(); TailLog(); };
+            timer.Tick += (s, e) => RefreshAll();
             timer.Start();
-            RefreshDiagnostics();
+            RefreshAll();
             LoadSettings();
-            TailLog();
         }
 
-        void RefreshDiagnostics()
+        void RefreshAll()
+        {
+            var log = PatchState.ReadTail();
+            RefreshDiagnostics(log);
+            ShowLog(log);
+        }
+
+        void RefreshDiagnostics(string log)
         {
             var wrapper = SystemState.GetWrapperState();
             lblWrapper.Text = "Wrapper: " + wrapper;
@@ -59,6 +69,11 @@ namespace RDPForge
             lblVersion.Text = "termsrv.dll: " + SystemState.GetTermsrvVersion();
             lblWrapper.ForeColor = wrapper == WrapperState.RDPForge
                 ? System.Drawing.Color.DarkGreen : System.Drawing.Color.DarkRed;
+            var patch = PatchState.Summarize(log);
+            lblPatch.Text = "Patches: " + patch.Text;
+            lblPatch.ForeColor = patch.IsGood ? System.Drawing.Color.DarkGreen
+                : patch.IsBad ? System.Drawing.Color.DarkRed
+                : System.Drawing.SystemColors.ControlText;
         }
 
         void LoadSettings()
@@ -67,6 +82,9 @@ namespace RDPForge
             {
                 chkConnections.Checked = TsSettings.GetAllowConnections();
                 chkSingleSession.Checked = TsSettings.GetSingleSessionPerUser();
+                chkLegacy.Checked = TsSettings.GetHonorLegacy();
+                chkCamera.Checked = TsSettings.GetCameraAllowed();
+                chkUsb.Checked = TsSettings.GetUsbForUsers();
                 cmbNla.SelectedIndex = (int)TsSettings.GetNla();
                 cmbShadow.SelectedIndex = TsSettings.GetShadow();
                 numPort.Value = TsSettings.GetPort();
@@ -80,6 +98,9 @@ namespace RDPForge
             {
                 TsSettings.SetAllowConnections(chkConnections.Checked);
                 TsSettings.SetSingleSessionPerUser(chkSingleSession.Checked);
+                TsSettings.SetHonorLegacy(chkLegacy.Checked);
+                TsSettings.SetCameraAllowed(chkCamera.Checked);
+                TsSettings.SetUsbForUsers(chkUsb.Checked);
                 if (cmbNla.SelectedIndex >= 0)
                     TsSettings.SetNla((TsSettings.NlaMode)cmbNla.SelectedIndex);
                 if (cmbShadow.SelectedIndex >= 0)
@@ -118,21 +139,11 @@ namespace RDPForge
             catch (Exception ex) { Error(ex.Message); }
         }
 
-        void TailLog()
+        void ShowLog(string text)
         {
             try
             {
-                var log = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                    "RDPForge", "forge.log");
-                if (!File.Exists(log)) return;
-                using (var fs = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                using (var sr = new StreamReader(fs))
-                {
-                    var text = sr.ReadToEnd();
-                    if (text.Length > 8000) text = text.Substring(text.Length - 8000);
-                    if (txtLog.Text != text) { txtLog.Text = text; txtLog.SelectionStart = txtLog.Text.Length; txtLog.ScrollToCaret(); }
-                }
+                if (txtLog.Text != text) { txtLog.Text = text; txtLog.SelectionStart = txtLog.Text.Length; txtLog.ScrollToCaret(); }
             }
             catch { }
         }
