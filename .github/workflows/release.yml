@@ -24,7 +24,7 @@ jobs:
           ls -R zig-out/bin
           cd zig-out/bin
           for d in *-windows-gnu; do
-            (cd "$d" && zip -r "../../RDPForge-$d.zip" ForgeHook.dll InstallerCli.exe)
+            (cd "$d" && zip -r "$GITHUB_WORKSPACE/RDPForge-$d.zip" ForgeHook.dll InstallerCli.exe)
           done
           cd "$GITHUB_WORKSPACE"
           ls -la RDPForge-*.zip
