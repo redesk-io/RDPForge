@@ -185,6 +185,7 @@ fn modules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
 }
 
 pub fn build(b: *std.Build) void {
+    const optimize = b.standardOptimizeOption(.{});
     const targets = [_]std.Target.Query{
         .{ .cpu_arch = .x86, .os_tag = .windows, .abi = .gnu },
         .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu },
@@ -192,15 +193,15 @@ pub fn build(b: *std.Build) void {
     };
     for (targets) |t| {
         const resolved = b.resolveTargetQuery(t);
-        const m = modules(b, resolved, .ReleaseSafe);
-        const zydis = zydisLib(b, resolved, .ReleaseSafe);
+        const m = modules(b, resolved, optimize);
+        const zydis = zydisLib(b, resolved, optimize);
         const hook = b.addLibrary(.{
             .name = "ForgeHook",
             .linkage = .dynamic,
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/ForgeHook/DllMain.zig"),
                 .target = resolved,
-                .optimize = .ReleaseSafe,
+                .optimize = optimize,
                 .imports = &.{
                     .{ .name = "Patch", .module = m.patch },
                 },
@@ -216,7 +217,7 @@ pub fn build(b: *std.Build) void {
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/InstallerCli/main.zig"),
                 .target = resolved,
-                .optimize = .ReleaseSafe,
+                .optimize = optimize,
                 .imports = &.{
                     .{ .name = "Args", .module = m.args },
                     .{ .name = "Backend", .module = m.backend },

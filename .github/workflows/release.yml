@@ -18,7 +18,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-      - run: zig build -Doptimize=Release --summary all
+      - run: zig build -Doptimize=ReleaseSafe --summary all
       - run: |
           cd zig-out/bin
           for d in *-windows-gnu; do
