@@ -39,6 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: microsoft/setup-msbuild@v2
+      - run: msbuild -t:restore src/ManagerGui/ManagerGui.csproj
       - run: msbuild src/ManagerGui/ManagerGui.csproj -p:Configuration=Release
       - uses: actions/upload-artifact@v4
         with:
