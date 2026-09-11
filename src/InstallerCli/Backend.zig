@@ -119,8 +119,10 @@ fn wbuf(buf: []u16, s: []const u8) [:0]u16 {
 
 fn traceLog(msg: []const u8) void {
     if (comptime !windows_only) return;
+    const path = "C:\\ProgramData\\RDPForge\\install.log";
     std.fs.cwd().makePath("C:\\ProgramData\\RDPForge") catch {};
-    const f = std.fs.cwd().createFile("C:\\ProgramData\\RDPForge\\install.log", .{ .mode = .write_only }) catch return;
+    const f = std.fs.cwd().openFile(path, .{ .mode = .write_only }) catch
+        std.fs.cwd().createFile(path, .{}) catch return;
     defer f.close();
     f.seekFromEnd(0) catch return;
     f.writeAll(msg) catch {};
