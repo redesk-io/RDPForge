@@ -65,14 +65,8 @@ namespace RDPForge
             try
             {
                 var names = new System.Collections.Generic.List<string>();
-                IntPtr server = WinStation.OpenServer();
-                if (server == IntPtr.Zero) return names.ToArray();
-                try
-                {
-                    foreach (var name in WinStation.Enumerate(server))
-                        names.Add(name);
-                }
-                finally { WinStation.CloseServer(server); }
+                foreach (var name in WinStation.Enumerate())
+                    names.Add(name);
                 return names.ToArray();
             }
             catch { return new string[0]; }
