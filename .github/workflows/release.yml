@@ -26,7 +26,7 @@ jobs:
           for d in *-windows-gnu; do
             (cd "$d" && zip -r "../../RDPForge-$d.zip" ForgeHook.dll InstallerCli.exe)
           done
-          cd ../..
+          cd "$GITHUB_WORKSPACE"
           ls -la RDPForge-*.zip
           test $(ls RDPForge-*.zip | wc -l) -eq 3
       - uses: actions/upload-artifact@v4
