@@ -117,6 +117,16 @@ fn wbuf(buf: []u16, s: []const u8) [:0]u16 {
     return buf[0..n :0];
 }
 
+fn traceLog(msg: []const u8) void {
+    if (comptime !windows_only) return;
+    std.fs.cwd().makePath("C:\\ProgramData\\RDPForge") catch {};
+    const f = std.fs.cwd().createFile("C:\\ProgramData\\RDPForge\\install.log", .{ .mode = .write_only }) catch return;
+    defer f.close();
+    f.seekFromEnd(0) catch return;
+    f.writeAll(msg) catch {};
+    f.writeAll("\n") catch {};
+}
+
 fn errFromLast(default: BackendError) BackendError {
     return switch (GetLastError()) {
         5 => BackendError.AccessDenied,
@@ -126,7 +136,7 @@ fn errFromLast(default: BackendError) BackendError {
 }
 
 fn openParams(access: DWORD) BackendError!HKEY {
-    var sub: [128]u16 = undefined;
+    var sub: [128]u16 = [_]u16{0} ** 128;
     var key: HKEY = null;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, wbuf(&sub, Plan.termservice_params).ptr, 0, access, &key) != 0 or key == null)
         return BackendError.RegistryFailed;
@@ -136,14 +146,14 @@ fn openParams(access: DWORD) BackendError!HKEY {
 fn readServiceDll(alloc: std.mem.Allocator) BackendError![]u8 {
     const key = try openParams(KEY_READ);
     defer _ = RegCloseKey(key);
-    var name: [32]u16 = undefined;
-    var data: [520]u8 = undefined;
+    var name: [32]u16 = [_]u16{0} ** 32;
+    var data: [520]u8 = [_]u8{0} ** 520;
     var dtype: DWORD = 0;
     var size: DWORD = @as(u32, @intCast(data.len));
     if (RegQueryValueExW(key, wbuf(&name, Plan.service_dll_value).ptr, null, &dtype, data[0..].ptr, &size) != 0)
         return BackendError.RegistryFailed;
     const wlen = size / 2;
-    var tmp: [260]u16 = undefined;
+    var tmp: [260]u16 = [_]u16{0} ** 260;
     const n = @min(wlen, tmp.len);
     var i: usize = 0;
     while (i < n) : (i += 1) tmp[i] = std.mem.readInt(u16, data[i * 2 ..][0..2], .little);
@@ -153,8 +163,8 @@ fn readServiceDll(alloc: std.mem.Allocator) BackendError![]u8 {
 fn writeServiceDll(path: []const u8) BackendError!void {
     const key = try openParams(KEY_WRITE);
     defer _ = RegCloseKey(key);
-    var name: [32]u16 = undefined;
-    var val: [520]u16 = undefined;
+    var name: [32]u16 = [_]u16{0} ** 32;
+    var val: [520]u16 = [_]u16{0} ** 520;
     const w = wbuf(&val, path);
     const bytes: [*]const u8 = @ptrCast(w.ptr);
     if (RegSetValueExW(key, wbuf(&name, Plan.service_dll_value).ptr, 0, REG_EXPAND_SZ, bytes, (@as(u32, @intCast(w.len)) + 1) * 2) != 0)
@@ -162,28 +172,28 @@ fn writeServiceDll(path: []const u8) BackendError!void {
 }
 
 fn writeDword(subkey: []const u8, value: []const u8, data: DWORD) BackendError!void {
-    var sub: [256]u16 = undefined;
+    var sub: [256]u16 = [_]u16{0} ** 256;
     var key: HKEY = null;
     if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, wbuf(&sub, subkey).ptr, 0, null, 0, KEY_WRITE, null, &key, null) != 0 or key == null)
         return BackendError.RegistryFailed;
     defer _ = RegCloseKey(key);
-    var name: [64]u16 = undefined;
-    var raw: [4]u8 = undefined;
+    var name: [64]u16 = [_]u16{0} ** 64;
+    var raw: [4]u8 = [_]u8{0} ** 4;
     std.mem.writeInt(u32, &raw, data, .little);
     if (RegSetValueExW(key, wbuf(&name, value).ptr, 0, REG_DWORD, raw[0..].ptr, 4) != 0)
         return BackendError.RegistryFailed;
 }
 
 fn fileExists(path: []const u8) bool {
-    var buf: [520]u16 = undefined;
+    var buf: [520]u16 = [_]u16{0} ** 520;
     return GetFileAttributesW(wbuf(&buf, path).ptr) != INVALID_FILE_ATTRIBUTES;
 }
 
 fn serviceState() BackendError!DWORD {
-    const scm = OpenSCManagerW(null, null, SERVICE_QUERY_STATUS);
+    const scm = OpenSCManagerW(null, null, SC_MANAGER_ALL_ACCESS);
     if (scm == null) return errFromLast(BackendError.ServiceFailed);
     defer _ = CloseServiceHandle(scm);
-    var name: [32]u16 = undefined;
+    var name: [32]u16 = [_]u16{0} ** 32;
     const svc = OpenServiceW(scm, wbuf(&name, "TermService").ptr, SERVICE_QUERY_STATUS);
     if (svc == null) return errFromLast(BackendError.ServiceFailed);
     defer _ = CloseServiceHandle(svc);
@@ -195,10 +205,10 @@ fn serviceState() BackendError!DWORD {
 }
 
 fn stopServiceByName(name_u8: []const u8) void {
-    const scm = OpenSCManagerW(null, null, SERVICE_STOP | SERVICE_QUERY_STATUS);
+    const scm = OpenSCManagerW(null, null, SC_MANAGER_ALL_ACCESS);
     if (scm == null) return;
     defer _ = CloseServiceHandle(scm);
-    var name: [64]u16 = undefined;
+    var name: [64]u16 = [_]u16{0} ** 64;
     const svc = OpenServiceW(scm, wbuf(&name, name_u8).ptr, SERVICE_STOP | SERVICE_QUERY_STATUS);
     if (svc == null) return;
     defer _ = CloseServiceHandle(svc);
@@ -217,10 +227,10 @@ fn stopServiceByName(name_u8: []const u8) void {
 }
 
 fn startServiceByName(name_u8: []const u8) BackendError!void {
-    const scm = OpenSCManagerW(null, null, SERVICE_START);
+    const scm = OpenSCManagerW(null, null, SC_MANAGER_ALL_ACCESS);
     if (scm == null) return errFromLast(BackendError.ServiceFailed);
     defer _ = CloseServiceHandle(scm);
-    var name: [64]u16 = undefined;
+    var name: [64]u16 = [_]u16{0} ** 64;
     const svc = OpenServiceW(scm, wbuf(&name, name_u8).ptr, SERVICE_START);
     if (svc == null) return errFromLast(BackendError.ServiceFailed);
     defer _ = CloseServiceHandle(svc);
@@ -229,9 +239,9 @@ fn startServiceByName(name_u8: []const u8) BackendError!void {
 }
 
 fn runHidden(cmd: []const u8) void {
-    var buf: [1024]u16 = undefined;
+    var buf: [1024]u16 = [_]u16{0} ** 1024;
     const w = wbuf(&buf, cmd);
-    var mut: [1024]u16 = undefined;
+    var mut: [1024]u16 = [_]u16{0} ** 1024;
     @memcpy(mut[0..w.len], w);
     mut[w.len] = 0;
     var si: STARTUPINFOW = std.mem.zeroes(STARTUPINFOW);
@@ -258,14 +268,14 @@ fn basenameLower(path: []const u8, out: []u8) []const u8 {
 
 fn installDir(alloc: std.mem.Allocator, system32_layout: bool) BackendError![]u8 {
     if (system32_layout) {
-        var sysdir: [260]u16 = undefined;
+        var sysdir: [260]u16 = [_]u16{0} ** 260;
         const n = GetSystemDirectoryW(&sysdir, sysdir.len);
         if (n == 0 or n >= sysdir.len) return BackendError.FileFailed;
         const s = std.unicode.utf16LeToUtf8Alloc(alloc, sysdir[0..n]) catch return BackendError.FileFailed;
         return s;
     }
-    var pf: [260]u16 = undefined;
-    var pfname: [32]u16 = undefined;
+    var pf: [260]u16 = [_]u16{0} ** 260;
+    var pfname: [32]u16 = [_]u16{0} ** 32;
     const n = GetEnvironmentVariableW(wbuf(&pfname, "ProgramFiles").ptr, &pf, pf.len);
     if (n == 0 or n >= pf.len) return BackendError.FileFailed;
     const pfs = std.unicode.utf16LeToUtf8Alloc(alloc, pf[0..n]) catch return BackendError.FileFailed;
@@ -274,7 +284,7 @@ fn installDir(alloc: std.mem.Allocator, system32_layout: bool) BackendError![]u8
 }
 
 fn exeDir(alloc: std.mem.Allocator) BackendError![]u8 {
-    var buf: [520]u16 = undefined;
+    var buf: [520]u16 = [_]u16{0} ** 520;
     const n = GetModuleFileNameW(null, &buf, buf.len);
     if (n == 0 or n >= buf.len) return BackendError.FileFailed;
     const s = std.unicode.utf16LeToUtf8Alloc(alloc, buf[0..n]) catch return BackendError.FileFailed;
@@ -297,7 +307,7 @@ pub fn healthCheck() BackendError!Health {
         .hook_file_present = false,
         .service_running = false,
     };
-    var lower: [260]u8 = undefined;
+    var lower: [260]u8 = [_]u8{0} ** 260;
     const base = basenameLower(dll, &lower);
     const st = serviceState() catch SERVICE_STOPPED;
     return Health{
@@ -314,8 +324,9 @@ pub fn install(system32_layout: bool, overwrite: bool) BackendError!void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
+    traceLog("install: read ServiceDll");
     const current = try readServiceDll(alloc);
-    var lower: [260]u8 = undefined;
+    var lower: [260]u8 = [_]u8{0} ** 260;
     const base = basenameLower(current, &lower);
     const is_termsrv = std.mem.eql(u8, base, "termsrv.dll");
     const is_hook = std.mem.eql(u8, base, "forgehook.dll");
@@ -328,15 +339,18 @@ pub fn install(system32_layout: bool, overwrite: bool) BackendError!void {
 
     stopServiceByName("UmRdpService");
     stopServiceByName("TermService");
+    traceLog("install: services stopped");
 
-    var wdir: [520]u16 = undefined;
+    var wdir: [520]u16 = [_]u16{0} ** 520;
     _ = CreateDirectoryW(wbuf(&wdir, dir).ptr, null);
-    var wsrc: [520]u16 = undefined;
-    var wdst: [520]u16 = undefined;
+    var wsrc: [520]u16 = [_]u16{0} ** 520;
+    var wdst: [520]u16 = [_]u16{0} ** 520;
     if (CopyFileW(wbuf(&wsrc, src).ptr, wbuf(&wdst, dst).ptr, 0) == 0)
         return errFromLast(BackendError.FileFailed);
 
+    traceLog("install: files copied");
     try writeServiceDll(dst);
+    traceLog("install: ServiceDll set");
     try writeDword(Plan.ts_key, "fDenyTSConnections", 0);
     try writeDword(Plan.ts_key, "EnableConcurrentSessions", 1);
     try writeDword(Plan.ts_key, "AllowMultipleTSSessions", 1);
@@ -345,6 +359,7 @@ pub fn install(system32_layout: bool, overwrite: bool) BackendError!void {
 
     try startServiceByName("TermService");
     try startServiceByName("UmRdpService");
+    traceLog("install: services restarted");
     runHidden("schtasks /Create /SC ONSTART /TN RDPForgeHealth /TR \"'C:\\Program Files\\RDP Wrapper\\InstallerCli.exe' -w\" /RL HIGHEST /RU SYSTEM /F");
 }
 
@@ -355,12 +370,13 @@ pub fn uninstall(keep_config: bool) BackendError!void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    var sysdir: [260]u16 = undefined;
+    var sysdir: [260]u16 = [_]u16{0} ** 260;
     const n = GetSystemDirectoryW(&sysdir, sysdir.len);
     if (n == 0 or n >= sysdir.len) return BackendError.FileFailed;
     const sys = std.unicode.utf16LeToUtf8Alloc(alloc, sysdir[0..n]) catch return BackendError.FileFailed;
     const termsrv = std.fs.path.join(alloc, &[_][]const u8{ sys, Plan.termsrv_dll_name }) catch return BackendError.FileFailed;
 
+    traceLog("install: read ServiceDll");
     const current = try readServiceDll(alloc);
     const dir = try installDir(alloc, false);
     const hook = try Plan.hookDllPath(alloc, dir);
@@ -371,9 +387,9 @@ pub fn uninstall(keep_config: bool) BackendError!void {
     try startServiceByName("TermService");
     try startServiceByName("UmRdpService");
 
-    var whook: [520]u16 = undefined;
+    var whook: [520]u16 = [_]u16{0} ** 520;
     _ = DeleteFileW(wbuf(&whook, hook).ptr);
-    var wdir: [520]u16 = undefined;
+    var wdir: [520]u16 = [_]u16{0} ** 520;
     _ = RemoveDirectoryW(wbuf(&wdir, dir).ptr);
     runHidden("schtasks /Delete /TN RDPForgeHealth /F");
     _ = keep_config;
@@ -382,6 +398,7 @@ pub fn uninstall(keep_config: bool) BackendError!void {
 
 pub fn restartServices() BackendError!void {
     if (comptime !windows_only) return BackendError.UnsupportedOs;
+    traceLog("restart: begin");
     try requireAdmin();
     stopServiceByName("UmRdpService");
     stopServiceByName("TermService");
